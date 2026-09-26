@@ -1,0 +1,24 @@
+{
+  "name": "ultralight-project-builder",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "wrangler pages dev",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name ultralight-project-builder",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "dev:sandbox": "wrangler pages dev dist --d1=DB --local --ip 0.0.0.0 --port 3000",
+    "db:migrate:local": "wrangler d1 migrations apply ultralight-builder-production --local",
+    "db:migrate:prod": "wrangler d1 migrations apply ultralight-builder-production --remote",
+    "check": "node --check public/static/app.js && node --check runner/src/index.mjs && node --check runner/src/sap.mjs && node --check shared/pack.js"
+  },
+  "dependencies": {
+    "hono": "^4.13.8"
+  },
+  "devDependencies": {
+    "@hono/vite-build": "^1.11.1",
+    "@hono/vite-dev-server": "^0.26.1",
+    "vite": "^8.1.4",
+    "wrangler": "^4.110.0"
+  }
+}

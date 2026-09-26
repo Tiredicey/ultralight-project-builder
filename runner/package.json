@@ -1,0 +1,14 @@
+{
+  "name": "ultralight-runner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "setup": "npm install && npx playwright install --with-deps chromium"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
