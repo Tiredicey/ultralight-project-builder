@@ -45,7 +45,7 @@ Cloudflare Workers cannot run a browser, so the runner must be a PC, VM or CI bo
 
 ## Setup
 
-**New to this? Start with the [easy step-by-step guide](GUIDE_EASY.md).** Technical version: [SETUP.md](SETUP.md). Short form:
+**Technical version: [SETUP.md](SETUP.md).** Short form:
 
 ```bash
 npm install
