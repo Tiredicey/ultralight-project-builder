@@ -96,7 +96,7 @@ const jobView = (job: any) => {
 
 export const api = new Hono<Env>()
 
-api.onError((err, c) => c.json({ error: err.message || 'Server error' }, 500))
+api.onError((err, c) => { console.error('API error', c.req.method, c.req.path, err.message); return c.json({ error: err.message || 'Server error' }, 500) })
 api.use('*', async (c, next) => { await ensureSchema(c); await next() })
 
 api.get('/health', async (c) => {
