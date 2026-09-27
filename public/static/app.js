@@ -113,7 +113,7 @@ function renderPending() {
 
 const logout = run(async () => { await http('/auth/logout', { method: 'POST' }); S.user = null; render() })
 
-const NAV = [['launch', 'Run pack'], ['canvas', 'Live canvas'], ['jobs', 'Runs and evidence'], ['plan', 'Project data'], ['guide', 'Setup guide']]
+const NAV = [['launch', 'Run pack'], ['canvas', 'Live canvas'], ['sheet', 'Task sheet'], ['ready', 'Readiness'], ['jobs', 'Runs and evidence'], ['plan', 'Project data'], ['guide', 'Setup guide']]
 
 function navHtml() {
   const items = [...NAV, ...(S.user.role === 'owner' || S.user.role === 'admin' ? [['admin', 'Owner console']] : [])]
@@ -138,7 +138,7 @@ function renderShell() {
   $('#theme').onclick = toggleTheme
   $('#logout').onclick = logout
   $('#logout2').onclick = logout
-  const views = { launch: viewLaunch, canvas: viewCanvas, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin }
+  const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin }
   ;(views[S.view] || viewLaunch)()
 }
 
@@ -178,7 +178,7 @@ async function viewLaunch() {
       <section class="card stack">
         <h2>Mode</h2>
         <div class="modes">
-          ${[['assist', 'Assist', 'Automation runs, pauses on manual steps and failures, you finish on the canvas.'], ['auto', 'Autopilot', 'Only stops on errors. Manual steps still wait for you.'], ['observe', 'Observe', 'Login and read-back only. Canvas input is blocked.']].map(([k, l, d]) => `<label class="mode"><input type="radio" name="mode" value="${k}" ${S.mode === k ? 'checked' : ''}><b>${l}</b><span class="small muted">${d}</span></label>`).join('')}
+          ${[['assist', 'Assist', 'Automation runs, pauses on manual steps and failures, you finish on the canvas.'], ['auto', 'Autopilot', 'Only stops on errors. Manual steps still wait for you.'], ['observe', 'Observe', 'Login and read-back only. Canvas input is blocked.'], ['validate', 'Validate', 'Read-only. Checks in SAP whether each selected task is already done and reports pass or fail per task.']].map(([k, l, d]) => `<label class="mode"><input type="radio" name="mode" value="${k}" ${S.mode === k ? 'checked' : ''}><b>${l}</b><span class="small muted">${d}</span></label>`).join('')}
         </div>
         <button class="btn primary" type="submit" ${S.accounts.length ? '' : 'disabled'}>Start run</button>
       </section>
@@ -240,6 +240,7 @@ async function viewCanvas() {
         <button class="btn sm" data-c="skip">Skip step</button>
         <button class="btn sm" data-c="capture">Capture evidence</button>
         <button class="btn sm" id="ovBtn" aria-pressed="${S.overlay}">DOM map</button>
+        <button class="btn sm" id="sheetBtn" aria-expanded="false" aria-controls="drawer">Task sheet</button>
         <button class="btn sm danger" data-c="abort">Abort</button>
       </div>
       <form class="typebar" id="typebar">
@@ -255,7 +256,9 @@ async function viewCanvas() {
       <div class="card stack"><h3>Activity log</h3><div class="log" id="log"></div></div>
     </aside>
   </div>`
+  v.insertAdjacentHTML('beforeend', '<aside class="drawer" id="drawer" hidden aria-label="Task sheet for the current task"></aside>')
   wireCanvas()
+  $('#sheetBtn').onclick = run(async () => { const d = $('#drawer'); const open = d.hidden; d.hidden = !open; $('#sheetBtn').setAttribute('aria-expanded', String(open)); if (open) await paintDrawer() })
   paintJob()
   pollFrame()
   S.timers.push(setInterval(run(async () => { if (!S.job) return; const was = S.job.status; await loadJob(S.job.id); paintJob(); if (was !== S.job.status && ['done', 'failed', 'aborted'].includes(S.job.status)) toast(`Run ${S.job.status}`) }), 1500))
@@ -459,6 +462,170 @@ async function viewPlan() {
   $('#planAcc')?.addEventListener('change', (e) => { S.selAccount = e.target.value; viewPlan() })
 }
 
+// ---------- Task sheet: every value per task, how to check it, print to PDF, optional uploaded PDF ----------
+const sheetCache = {}
+async function loadSheet(sap) { return (sheetCache[sap] = sheetCache[sap] || await http(`/me/sheet/${encodeURIComponent(sap)}`)) }
+
+const valuesHtml = (v) => {
+  if (!v) return ''
+  if (v.rows) return `<ol class="vals rows">${v.rows.map((r) => `<li class="mono">${esc(r)}</li>`).join('')}</ol>`
+  return `<dl class="vals">${Object.entries(v).map(([k, x]) => `<dt>${esc(k)}</dt><dd class="mono">${esc(x)}</dd>`).join('')}</dl>`
+}
+
+const taskCard = (t, status, docLink) => `
+  <article class="card sheet-task" id="task-${t.id}">
+    <header class="row" style="justify-content:space-between">
+      <h2>${t.id}. ${esc(t.title)}</h2>
+      <div class="row small">${status || ''}<span class="pill">${esc(t.role)}</span><code>${esc(t.txn)}</code>${t.shot ? '<span class="pill accent">screenshot</span>' : ''}${docLink || ''}</div>
+    </header>
+    <p class="check-how"><b>How to check it yourself:</b> ${esc(t.how)}</p>
+    <ol class="sheet-steps">${t.steps.map((s) => `<li><span class="k mono">${esc(s.key)}</span><div><div>${esc(s.label)}${s.op === 'manual' ? ' <span class="pill warn">you</span>' : ''}</div>${s.instruction ? `<p class="small muted">${esc(s.instruction)}</p>` : ''}${valuesHtml(s.values)}</div></li>`).join('')}</ol>
+  </article>`
+
+const valPill = (v) => !v ? '<span class="pill">not checked</span>' : v.level === 'ok' ? '<span class="pill ok">done in SAP</span>' : v.level === 'warn' ? '<span class="pill warn">check evidence</span>' : '<span class="pill err">not done</span>'
+
+async function viewSheet() {
+  const v = $('#view')
+  v.innerHTML = '<p class="muted">Loading task sheet</p>'
+  if (!S.accounts.length) { const acc = await http('/me/accounts'); S.accounts = acc.accounts }
+  const sap = S.selAccount || S.accounts[0]?.sap_user || 'LEARN-000'
+  const [sheet, docs, ready] = await Promise.all([loadSheet(sap), http('/me/docs'), http('/me/readiness').catch(() => null)])
+  const doc = docs.docs[0]
+  const val = ready?.accounts.find((a) => a.sapUser === sap)?.validation
+  const focus = Number(location.hash.split('/')[1]) || 0
+  const d = sheet.data
+  v.innerHTML = `
+  <div class="head no-print"><div><h1>Task sheet for ${esc(sheet.project)}</h1><p>Every value the pack types for ${esc(sheet.sapUser)}, task by task, with what a correct result looks like in SAP. Print it or save it as a PDF to keep beside SAP, or check your own work against it.</p></div>
+    <div class="row">
+      <select class="input" id="sheetAcc" style="max-width:12rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>
+      <button class="btn primary" id="printSheet">Print / Save as PDF</button>
+    </div></div>
+  <div class="sheet-layout">
+    <nav class="card sheet-toc no-print" aria-label="Tasks">
+      <h3>Tasks</h3>
+      <ol>${sheet.tasks.map((t) => `<li><a href="#sheet/${t.id}" data-jump="${t.id}">${t.id}. ${esc(t.title)}</a>${val ? ` ${valPill(val.tasks[t.id])}` : ''}</li>`).join('')}</ol>
+      ${val ? `<p class="small muted">Status from validate run #${val.jobId}, ${esc(ago(val.at))}. <a href="#ready">Readiness</a></p>` : '<p class="small muted">Start a run in <b>Validate</b> mode to see which tasks are already done in SAP.</p>'}
+      ${doc ? `<p class="small"><a href="#" id="openDoc">Open ${esc(doc.name)}</a></p>` : S.user.role !== 'user' ? '<p class="small muted">Upload the official task PDF in the Owner console to link its pages here.</p>' : ''}
+    </nav>
+    <div class="stack sheet-body">
+      <section class="card print-only"><h1>IT2406 Performance Task 1 · ${esc(sheet.sapUser)} · ${esc(sheet.project)}</h1><p>Generated ${esc(new Date().toLocaleString())} from the Ultralight Project Builder pack.</p></section>
+      <section class="card"><h2>Key values</h2><dl class="kv" style="margin-top:.6rem">
+        <dt>Project</dt><dd class="mono">${esc(d.project)} · ${esc(d.projectText)}</dd><dt>Profile</dt><dd class="mono">${esc(d.profile)}</dd>
+        <dt>CO area / company code</dt><dd class="mono">${esc(d.controllingArea)} / ${esc(d.companyCode)}</dd><dt>Supplier</dt><dd class="mono">${esc(d.supplier)}</dd>
+        <dt>PS text</dt><dd class="mono">${esc(d.psText)}</dd><dt>Expected actual costs</dt><dd class="mono">1,750.00 after Task 11 · 11,450.00 after Task 13</dd></dl></section>
+      ${sheet.tasks.map((t) => taskCard(t, val ? valPill(val.tasks[t.id]) : '', doc?.task_pages?.[t.id] ? `<a class="btn sm no-print" href="#" data-docpage="${doc.task_pages[t.id]}">PDF p.${doc.task_pages[t.id]}</a>` : '')).join('')}
+    </div>
+  </div>
+  <div class="pdfview" id="pdfview" hidden><div class="pdfbar"><b id="pdfname"></b><button class="btn sm" id="pdfclose">Close</button></div><iframe id="pdfframe" title="Task PDF"></iframe></div>`
+  $('#sheetAcc').onchange = (e) => { S.selAccount = e.target.value; viewSheet() }
+  $('#printSheet').onclick = () => window.print()
+  document.querySelectorAll('[data-jump]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); history.replaceState(null, '', `#sheet/${a.dataset.jump}`); $(`#task-${a.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }))
+  const openDoc = run(async (page) => { await showPdf(doc, page) })
+  $('#openDoc')?.addEventListener('click', (e) => { e.preventDefault(); openDoc(1) })
+  document.querySelectorAll('[data-docpage]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); openDoc(Number(b.dataset.docpage)) }))
+  $('#pdfclose').onclick = () => { $('#pdfview').hidden = true }
+  if (focus) requestAnimationFrame(() => $(`#task-${focus}`)?.scrollIntoView({ block: 'start' }))
+}
+
+// Reassembles the uploaded PDF from its chunks into a blob URL, cached for the session.
+const pdfUrls = {}
+async function pdfUrl(doc) {
+  if (pdfUrls[doc.id]) return pdfUrls[doc.id]
+  const parts = []
+  for (let i = 0; i < doc.chunks; i++) { const r = await fetch(`/api/me/docs/${doc.id}/${i}`, { credentials: 'same-origin' }); if (!r.ok) throw new Error('Could not load the PDF'); parts.push(await r.text()) }
+  const bin = atob(parts.join(''))
+  const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
+  return (pdfUrls[doc.id] = URL.createObjectURL(new Blob([u8], { type: 'application/pdf' })))
+}
+async function showPdf(doc, page = 1) {
+  toast('Loading PDF')
+  const u = await pdfUrl(doc)
+  $('#pdfname').textContent = `${doc.name} · page ${page}`
+  $('#pdfframe').src = `${u}#page=${page}`
+  $('#pdfview').hidden = false
+}
+
+// Canvas side drawer: the sheet entry for the task the run is on.
+async function paintDrawer() {
+  const d = $('#drawer')
+  if (!d || d.hidden || !S.job) return
+  const sheet = await loadSheet(S.job.sap_user)
+  const steps = S.plan?.steps || []
+  const cur = steps[Math.min(S.job.step_idx, Math.max(steps.length - 1, 0))]
+  const tid = S.drawerTask || cur?.task || S.job.tasks[0]
+  const t = sheet.tasks.find((x) => x.id === tid) || sheet.tasks[0]
+  d.innerHTML = `<div class="row" style="justify-content:space-between"><h3>Task sheet</h3><button class="btn sm ghost" id="drClose">Close</button></div>
+    <select class="input" id="drTask" aria-label="Task">${sheet.tasks.map((x) => `<option value="${x.id}" ${x.id === t.id ? 'selected' : ''}>${x.id}. ${esc(x.title)}${cur?.task === x.id ? ' (current)' : ''}</option>`).join('')}</select>
+    ${taskCard(t, '', '')}
+    <a class="btn sm" href="#sheet/${t.id}">Open full sheet</a>`
+  $('#drClose').onclick = () => { d.hidden = true; $('#sheetBtn').setAttribute('aria-expanded', 'false') }
+  $('#drTask').onchange = run(async (e) => { S.drawerTask = Number(e.target.value); await paintDrawer() })
+}
+
+// ---------- Readiness: is everything set up for a run to succeed? ----------
+async function viewReady() {
+  const v = $('#view')
+  v.innerHTML = '<p class="muted">Checking</p>'
+  const [r, pack] = await Promise.all([http('/me/readiness'), S.pack || http('/pack').catch(() => null)])
+  S.pack = pack
+  const onlineRunners = r.runners.filter((x) => x.online)
+  const owner = S.user.role !== 'user'
+  const item = (ok, title, detail, fix) => `<li class="ready-item ${ok === true ? 'ok' : ok === false ? 'err' : 'warn'}"><span class="dot" aria-hidden="true"></span><div><b>${esc(title)}</b><div class="small muted">${detail}</div>${ok !== true && fix ? `<div class="small fix">${fix}</div>` : ''}</div><span class="pill ${ok === true ? 'ok' : ok === false ? 'err' : 'warn'}">${ok === true ? 'ready' : ok === false ? 'fix' : 'check'}</span></li>`
+  const runnerCards = r.runners.map((x) => {
+    const i = x.info || {}
+    const ver = x.version || i.version || 'unknown'
+    return `<section class="card stack"><div class="row" style="justify-content:space-between"><h2>${esc(x.name)}</h2>${x.online ? '<span class="pill ok">online</span>' : `<span class="pill err">offline · seen ${esc(ago(x.lastSeen))}</span>`}</div><ul class="ready">
+      ${item(x.online, 'Connected to this site', `last poll ${esc(ago(x.lastSeen))}`, 'Start the runner: <code>npm start</code>. On Oracle: <code>sudo systemctl start ultralight-runner</code>')}
+      ${item(ver === r.latest, `Runner version ${esc(ver)}`, ver === r.latest ? 'current' : `this site expects ${esc(r.latest)}`, 'On the runner machine: <code>git pull && cd runner && npm install</code>, then restart it')}
+      ${owner ? (i.host ? item(true, `Host ${esc(i.host)}`, `${esc(i.platform)} · Node ${esc(i.node)} · ${esc(i.cpus)} CPU · ${esc(i.memMb)} MB · Chromium ${esc(i.chromium)}`) : item(null, 'Host details', 'Runner 1.2 reports its host, SAP reachability and local accounts. Older runners do not.', 'Update the runner to 1.2')) : ''}
+      ${i.sap ? item(!!i.sap.ok, `Reaches SAP ${esc(i.sapHost)}`, i.sap.ok ? `HTTP ${esc(i.sap.status)} in ${esc(i.sap.ms)} ms, ${esc(ago(x.infoAt))}` : esc(i.sap.error || `HTTP ${i.sap.status}`), 'The machine needs outbound HTTPS to the SAP host') : ''}
+      ${owner && i.accounts ? item(i.accounts.length > 0, 'Local SAP accounts', i.accounts.length ? esc(i.accounts.join(', ')) : 'none: every run must carry its password', 'Add <code>SAP_ACCOUNTS=LEARN-###:password</code> to <code>runner/.env</code>') : ''}
+      ${item(true, 'Token scope', x.accounts.length ? esc(x.accounts.join(', ')) : 'all accounts')}
+    </ul></section>`
+  }).join('')
+  v.innerHTML = `
+  <div class="head"><div><h1>Readiness</h1><p>Everything a run needs, checked from here. Runners report their host and SAP reachability every 10 minutes. The task grid comes from the last <b>Validate</b> run, which reads SAP without changing anything.</p></div><button class="btn" id="reRead">Refresh</button></div>
+  <section class="card" style="margin-bottom:1rem"><ul class="ready">
+    ${item(r.runners.length > 0, 'Runner token issued', r.runners.length ? `${r.runners.length} active token(s)` : 'none', owner ? 'Owner console > Runners > Create token' : 'Ask the owner')}
+    ${item(onlineRunners.length > 0, 'A runner is online', onlineRunners.length ? esc(onlineRunners.map((x) => x.name).join(', ')) : 'none online right now', 'Start a runner. To keep one running with your PC off, host it on Oracle Cloud (Setup guide)')}
+    ${item(r.accounts.length > 0, 'SAP account available to you', r.accounts.length ? esc(r.accounts.map((a) => a.sapUser).join(', ')) : 'none granted', owner ? 'Owner console > SAP accounts, then tick it for the user' : 'Ask the owner to grant a LEARN-### account')}
+  </ul></section>
+  ${r.accounts.map((a) => {
+    const on = a.runners.filter((x) => x.online)
+    const pw = a.runners.some((x) => x.holdsPassword)
+    const val = a.validation
+    return `<section class="card stack" style="margin-bottom:1rem"><div class="row" style="justify-content:space-between"><h2>${esc(a.sapUser)} · ${esc(a.project)}</h2><div class="row"><button class="btn sm primary" data-val="${esc(a.sapUser)}" ${on.length ? '' : 'disabled title="No runner online"'}>Validate all tasks in SAP</button><a class="btn sm" href="#sheet">Task sheet</a></div></div>
+      <ul class="ready">
+        ${item(on.length > 0, 'Runner can take this account', on.length ? esc(on.map((x) => x.name).join(', ')) : a.runners.length ? 'the runner that covers it is offline' : 'no runner token covers it', 'Start the runner, or issue a token without an account limit')}
+        ${item(pw ? true : null, 'SAP password on the runner', pw ? 'held in runner/.env, runs start without asking' : 'not held: type it on Run pack for each run', 'Optional: add it to SAP_ACCOUNTS in runner/.env')}
+        ${a.lastRun ? item(a.lastRun.status === 'done' ? true : null, `Last run #${a.lastRun.id} ${esc(a.lastRun.status)}`, `${esc(a.lastRun.mode)} · tasks ${esc(a.lastRun.tasks.join(', '))} · ${esc(a.lastRun.result?.summary || '')} · ${esc(ago(a.lastRun.finished_at))}`) : ''}
+      </ul>
+      <h3>Tasks in SAP</h3>
+      ${val ? `<p class="small muted">From validate run #${val.jobId}, ${esc(ago(val.at))}: ${esc(val.result?.summary || '')}</p>` : '<p class="small muted">No validate run yet. It logs in, opens the project and the cost report, and reads what is there. Nothing is saved.</p>'}
+      <div class="val-grid">${(S.pack?.tasks || []).map((t) => { const x = val?.tasks[t.id]; return `<a class="val-cell ${!x ? '' : x.level === 'ok' ? 'ok' : x.level === 'warn' ? 'warn' : 'err'}" href="#sheet/${t.id}" title="${esc(x?.message || 'not checked yet')}"><b>${t.id}</b><span>${esc(t.title)}</span><em>${!x ? 'not checked' : x.level === 'ok' ? 'done' : x.level === 'warn' ? 'check evidence' : 'not done'}</em></a>` }).join('')}</div>
+      ${val ? `<details><summary class="small">What the runner read</summary><ul class="small mono val-detail">${Object.entries(val.tasks).map(([k, x]) => `<li><b>${esc(k)}</b> ${esc(x.message)}</li>`).join('')}</ul></details>` : ''}
+    </section>` }).join('')}
+  <h2 style="margin:1.4rem 0 .8rem">Runners</h2>
+  <div class="grid2">${runnerCards || '<p class="muted">No runner tokens yet.</p>'}</div>`
+  $('#reRead').onclick = () => viewReady()
+  document.querySelectorAll('[data-val]').forEach((b) => b.addEventListener('click', run(async () => {
+    const res = await http('/jobs', { method: 'POST', body: { sapUser: b.dataset.val, tasks: [], mode: 'validate' } }).catch((err) => { if (err.data?.jobId) { go('canvas', err.data.jobId); return null } throw err })
+    if (res) { toast(`Validate run #${res.id} queued`); go('canvas', res.id) }
+  })))
+}
+
+async function paintDocs() {
+  const el = $('#docList'); if (!el) return
+  const { docs } = await http('/me/docs')
+  el.innerHTML = docs.length ? docs.map((d, n) => `<div class="stack doc-item">
+    <div class="row" style="justify-content:space-between"><div><b>${esc(d.name)}</b> <span class="small muted">${(d.size / 1048576).toFixed(1)} MB · ${esc(fmtTime(d.created_at))}${n === 0 ? ' · shown to users' : ''}</span></div><button class="btn sm danger" data-deldoc="${d.id}">Remove</button></div>
+    <details ${n === 0 && !Object.keys(d.task_pages).length ? 'open' : ''}><summary class="small">Task to page map (${Object.keys(d.task_pages).length} of 14 set)</summary>
+      <form class="pagemap" data-pm="${d.id}">${Array.from({ length: 14 }, (_, i) => `<label class="small">Task ${i + 1}<input class="input" type="number" min="1" name="${i + 1}" value="${esc(d.task_pages[i + 1] || '')}"></label>`).join('')}<button class="btn sm">Save pages</button></form>
+    </details></div>`).join('') : '<p class="small muted">No PDF uploaded yet.</p>'
+  el.querySelectorAll('[data-deldoc]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Remove this PDF?')) return; await http(`/admin/docs/${b.dataset.deldoc}`, { method: 'DELETE' }); paintDocs() })))
+  el.querySelectorAll('[data-pm]').forEach((f) => f.addEventListener('submit', run(async (e) => { e.preventDefault(); const taskPages = Object.fromEntries([...new FormData(f)].filter(([, x]) => x)); await http(`/admin/docs/${f.dataset.pm}`, { method: 'POST', body: { taskPages } }); toast('Page map saved') })))
+}
+
 function viewGuide() {
   const origin = location.origin
   $('#view').innerHTML = `
@@ -525,6 +692,38 @@ async function viewAdmin() {
     </section>
   </div>
   <section class="card scroll" style="margin-top:1rem"><h2>Audit log</h2><table class="t"><tbody>${a.audit.map((x) => `<tr><td class="small muted">${esc(fmtTime(x.created_at))}</td><td>${esc(x.email || '')}</td><td class="mono small">${esc(x.action)}</td><td class="small mono">${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></section>`
+  v.insertAdjacentHTML('beforeend', `
+  <div class="grid2" style="margin-top:1rem">
+    <section class="card stack"><h2>Task PDF</h2>
+      <p class="small muted">Upload the official task sheet. Everyone you approved can open it from Task sheet, and each task links to its page. Stored in D1, max 20 MB.</p>
+      <form class="row" id="docForm"><input class="input" type="file" id="docFile" accept="application/pdf,.pdf" required style="max-width:22rem"><button class="btn sm primary">Upload</button></form>
+      <div id="docProg" class="small muted" aria-live="polite"></div>
+      <div id="docList"></div>
+    </section>
+    <section class="card stack"><h2>Demo video</h2>
+      <p class="small muted">65 s walkthrough: real SAP execution with DOM-target highlighting, then this console. Royalty-free soundtrack.</p>
+      <video class="demo" controls preload="none" playsinline poster="/static/demo-poster.jpg"><source src="/static/demo.mp4" type="video/mp4"><a href="/static/demo.mp4">Download the video</a></video>
+      <div class="row small"><a href="/static/demo.mp4" download>Download MP4</a><span class="muted">1920×1080 · 14 MB</span></div>
+    </section>
+  </div>`)
+  paintDocs()
+  $('#docForm').onsubmit = run(async (e) => {
+    e.preventDefault()
+    const f = $('#docFile').files[0]
+    if (!f) throw new Error('Pick a PDF')
+    if (f.size > 20 * 1024 * 1024) throw new Error('PDF is larger than 20 MB')
+    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = () => rej(new Error('Could not read the file')); r.readAsDataURL(f) })
+    const meta = await http('/admin/docs', { method: 'POST', body: { name: f.name, size: f.size } })
+    for (let i = 0; i < meta.chunks; i++) {
+      $('#docProg').textContent = `Uploading part ${i + 1} of ${meta.chunks}`
+      const res = await fetch(`/api/admin/docs/${meta.id}/${i}`, { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: b64.slice(i * meta.chunkSize, (i + 1) * meta.chunkSize) })
+      if (!res.ok) { await http(`/admin/docs/${meta.id}`, { method: 'DELETE' }).catch(() => {}); throw new Error((await res.json().catch(() => ({}))).error || `Upload failed at part ${i + 1}`) }
+    }
+    $('#docProg').textContent = `${f.name} uploaded. Set the task pages below.`
+    $('#docFile').value = ''
+    toast('Task PDF uploaded')
+    paintDocs()
+  })
   const refresh = () => viewAdmin()
   $('#reg').onchange = run(async (e) => { await http('/admin/settings', { method: 'POST', body: { registration: e.target.value } }); toast(`Registration ${e.target.value}`) })
   document.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', run(async () => { await http(`/admin/users/${b.dataset.u}`, { method: 'POST', body: { status: b.dataset.st } }); toast(`User ${b.dataset.st}`); refresh() })))

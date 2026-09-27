@@ -181,3 +181,66 @@ table.t tr:nth-child(even) td { background: var(--surface-2); }
 .kv dd { margin: 0; font-family: var(--mono); }
 .center { min-height: 70dvh; display: grid; place-items: center; text-align: center; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Task sheet */
+.sheet-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1.2rem; align-items: start; }
+.sheet-toc { position: sticky; top: 1rem; max-height: calc(100dvh - 2rem); overflow: auto; }
+.sheet-toc ol { margin: .6rem 0; padding-left: 1.2rem; display: grid; gap: .35rem; font-size: .88rem; }
+.sheet-toc a { color: var(--text); text-decoration: none; }
+.sheet-toc a:hover { color: var(--accent); }
+.sheet-task header h2 { font-size: 1.1rem; }
+.check-how { margin: .7rem 0; padding: .6rem .8rem; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; font-size: .9rem; }
+.sheet-steps { list-style: none; margin: 0; padding: 0; display: grid; }
+.sheet-steps > li { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); gap: .6rem; padding: .5rem 0; border-top: 1px solid var(--line); font-size: .9rem; }
+.sheet-steps .k { color: var(--muted); }
+.vals { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .15rem .9rem; margin: .35rem 0 0; font-size: .84rem; }
+.vals dt { color: var(--muted); }
+.vals dd { margin: 0; word-break: break-word; }
+.vals.rows { display: block; padding-left: 1.2rem; }
+.print-only { display: none; }
+.pdfview { position: fixed; inset: 3vh 3vw; z-index: 60; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); display: grid; grid-template-rows: auto 1fr; }
+.pdfview[hidden] { display: none; }
+.pdfbar { display: flex; justify-content: space-between; align-items: center; padding: .6rem .9rem; border-bottom: 1px solid var(--line); }
+.pdfview iframe { width: 100%; height: 100%; border: 0; border-radius: 0 0 var(--r) var(--r); background: #fff; }
+@media (max-width: 1000px) { .sheet-layout { grid-template-columns: 1fr; } .sheet-toc { position: static; max-height: none; } }
+
+/* Canvas drawer */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 94vw); z-index: 50; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -12px 0 30px rgba(0,0,0,.18); padding: 1rem; overflow: auto; display: grid; gap: .8rem; align-content: start; }
+.drawer[hidden] { display: none; }
+.drawer .sheet-task { box-shadow: none; }
+
+/* Readiness */
+.ready { list-style: none; margin: 0; padding: 0; display: grid; }
+.ready-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .8rem; align-items: start; padding: .65rem 0; border-top: 1px solid var(--line); }
+.ready-item:first-child { border-top: 0; }
+.ready-item .dot { width: .6rem; height: .6rem; border-radius: 50%; margin-top: .45rem; background: var(--warn); }
+.ready-item.ok .dot { background: var(--ok); }
+.ready-item.err .dot { background: var(--err); }
+.ready-item .fix { margin-top: .25rem; color: var(--text); }
+.val-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; }
+.val-cell { display: grid; gap: .1rem; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: var(--r); text-decoration: none; color: var(--text); background: var(--surface); }
+.val-cell b { font-family: var(--mono); }
+.val-cell span { font-size: .78rem; color: var(--muted); line-height: 1.3; }
+.val-cell em { font-style: normal; font-size: .74rem; font-weight: 600; color: var(--muted); }
+.val-cell.ok { border-color: var(--ok); background: var(--ok-soft); } .val-cell.ok em { color: var(--ok); }
+.val-cell.err { border-color: var(--err); background: var(--err-soft); } .val-cell.err em { color: var(--err); }
+.val-cell.warn { border-color: var(--warn); background: var(--warn-soft); } .val-cell.warn em { color: var(--warn); }
+.val-detail { display: grid; gap: .3rem; padding-left: 1rem; margin-top: .5rem; }
+
+/* Owner console additions */
+video.demo { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r); background: #000; border: 1px solid var(--line); }
+.pagemap { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: .5rem; margin-top: .5rem; align-items: end; }
+.pagemap label { display: grid; gap: .2rem; color: var(--muted); }
+.doc-item { border-top: 1px solid var(--line); padding-top: .7rem; gap: .4rem; }
+
+@media print {
+  :root, :root[data-theme='dark'] { --bg: #fff; --surface: #fff; --surface-2: #f3f3f3; --line: #cfcfcf; --text: #111; --muted: #555; --accent: #6b5020; --accent-soft: #f4ecdc; --ok-soft: #e4f1e8; --err-soft: #f6e2e2; --warn-soft: #f6ecd8; --shadow: none; }
+  .side, .topbar, .no-print, .toast, .drawer, .pdfview { display: none !important; }
+  .shell { display: block; }
+  .main { padding: 0; }
+  .sheet-layout { display: block; }
+  .print-only { display: block; }
+  .card { box-shadow: none; margin-bottom: .8rem; }
+  .sheet-steps > li { break-inside: avoid; }
+  body { font-size: 11pt; }
+}
