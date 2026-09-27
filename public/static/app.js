@@ -503,7 +503,7 @@ async function viewSheet() {
   <div class="sheet-layout">
     <nav class="card sheet-toc no-print" aria-label="Tasks">
       <h3>Tasks</h3>
-      <ol>${sheet.tasks.map((t) => `<li><a href="#sheet/${t.id}" data-jump="${t.id}">${t.id}. ${esc(t.title)}</a>${val ? ` ${valPill(val.tasks[t.id])}` : ''}</li>`).join('')}</ol>
+      <ol>${sheet.tasks.map((t) => `<li><a href="#sheet/${t.id}" data-jump="${t.id}">${esc(t.title)}</a>${val ? ` ${valPill(val.tasks[t.id])}` : ''}</li>`).join('')}</ol>
       ${val ? `<p class="small muted">Status from validate run #${val.jobId}, ${esc(ago(val.at))}. <a href="#ready">Readiness</a></p>` : '<p class="small muted">Start a run in <b>Validate</b> mode to see which tasks are already done in SAP.</p>'}
       ${doc ? `<p class="small"><a href="#" id="openDoc">Open ${esc(doc.name)}</a></p>` : S.user.role !== 'user' ? '<p class="small muted">Upload the official task PDF in the Owner console to link its pages here.</p>' : ''}
     </nav>
@@ -598,7 +598,7 @@ async function viewReady() {
       <ul class="ready">
         ${item(on.length > 0, 'Runner can take this account', on.length ? esc(on.map((x) => x.name).join(', ')) : a.runners.length ? 'the runner that covers it is offline' : 'no runner token covers it', 'Start the runner, or issue a token without an account limit')}
         ${item(pw ? true : null, 'SAP password on the runner', pw ? 'held in runner/.env, runs start without asking' : 'not held: type it on Run pack for each run', 'Optional: add it to SAP_ACCOUNTS in runner/.env')}
-        ${a.lastRun ? item(a.lastRun.status === 'done' ? true : null, `Last run #${a.lastRun.id} ${esc(a.lastRun.status)}`, `${esc(a.lastRun.mode)} · tasks ${esc(a.lastRun.tasks.join(', '))} · ${esc(a.lastRun.result?.summary || '')} · ${esc(ago(a.lastRun.finished_at))}`) : ''}
+        ${a.lastRun ? item(a.lastRun.status === 'done' ? true : null, `Last run #${a.lastRun.id} ${esc(a.lastRun.status)}`, `${esc(a.lastRun.mode)} · tasks ${esc(a.lastRun.tasks.join(', '))} · ${esc(a.lastRun.result?.summary || '')} · ${esc(ago(a.lastRun.finished_at || a.lastRun.created_at))}`) : ''}
       </ul>
       <h3>Tasks in SAP</h3>
       ${val ? `<p class="small muted">From validate run #${val.jobId}, ${esc(ago(val.at))}: ${esc(val.result?.summary || '')}</p>` : '<p class="small muted">No validate run yet. It logs in, opens the project and the cost report, and reads what is there. Nothing is saved.</p>'}
@@ -708,13 +708,13 @@ async function viewAdmin() {
   <section class="card scroll" style="margin-top:1rem"><h2>Audit log</h2><table class="t"><tbody>${a.audit.map((x) => `<tr><td class="small muted">${esc(fmtTime(x.created_at))}</td><td>${esc(x.email || '')}</td><td class="mono small">${esc(x.action)}</td><td class="small mono">${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></section>`
   v.insertAdjacentHTML('beforeend', `
   <div class="grid2" style="margin-top:1rem">
-    <section class="card stack"><h2>Task PDF</h2>
+    <section class="card stack" style="align-content:start"><h2>Task PDF</h2>
       <p class="small muted">Upload the official task sheet. Everyone you approved can open it from Task sheet, and each task links to its page. Stored in D1, max 20 MB.</p>
       <form class="row" id="docForm"><input class="input" type="file" id="docFile" accept="application/pdf,.pdf" required style="max-width:22rem"><button class="btn sm primary">Upload</button></form>
       <div id="docProg" class="small muted" aria-live="polite"></div>
       <div id="docList"></div>
     </section>
-    <section class="card stack"><h2>Demo video</h2>
+    <section class="card stack" style="align-content:start"><h2>Demo video</h2>
       <p class="small muted">65 s walkthrough: real SAP execution with DOM-target highlighting, then this console. Royalty-free soundtrack.</p>
       <video class="demo" controls preload="none" playsinline poster="/static/demo-poster.jpg"><source src="/static/demo.mp4" type="video/mp4"><a href="/static/demo.mp4">Download the video</a></video>
       <div class="row small"><a href="/static/demo.mp4" download>Download MP4</a><span class="muted">1920×1080 · 14 MB</span></div>

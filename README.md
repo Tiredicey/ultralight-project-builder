@@ -24,7 +24,13 @@ Cloudflare Workers cannot run a browser, so the runner must be a PC, VM or CI bo
 - **Honest status.** A step shows `done` only after SAP read-back. Operator-completed steps are logged as "Marked done by operator, not verified by automation".
 - **Evidence.** Screenshots plus DOM captures (fields, grid cells, status bar) per task, downloadable for the Word report.
 - **Project data view.** Every value for `P/2###`, the WBS, 14 activities, 22 relationships with a computed network (ES, EF, float), milestones and the cost bridge.
-- Modes: **Assist** (default), **Autopilot**, **Observe** (read-only, canvas input blocked server-side).
+- Modes: **Assist** (default), **Autopilot**, **Observe** (read-only, canvas input blocked server-side), **Validate** (read-only per-task check, see below).
+- **Task sheet** (runner 1.2 / site 2026-09-27). Every value the pack types, per task, with a "how to check it yourself" line. Prints to PDF with a light print stylesheet (9 A4 pages). Also opens as a side drawer on the live canvas, showing the task the run is on.
+- **Task PDF.** The owner uploads the official task sheet (up to 20 MB, stored in D1 as 900 KB base64 chunks, `%PDF` header checked). Approved users open it from Task sheet; each task links to its page via a task-to-page map the owner fills in.
+- **Validate mode and Readiness.** A validate run logs in and reads SAP: project tree (WBS, 16 activities, PS text, milestones, REL status), all 22 predecessor links, activity 0135 costs and flexible flag, and the cost report (1,750.00 labour, 9,700.00 invoice, 11,450.00 total). Each task is marked done, not done, or "check evidence" for screenshot-only tasks 3, 5, 9. Nothing is saved. The Readiness page combines this with runner status: online, version, host, SAP reachability, which accounts it holds passwords for.
+- **`npm run doctor`** on the runner machine: Node, `.env`, token accepted by the site, token scope, version, SAP reachable, Chromium launches. Prints a fix per failure; does not log in to SAP.
+- **Oracle Cloud runner.** `deploy/oracle/setup.sh` installs Node 20 and Chromium on Ubuntu or Oracle Linux (x86 or ARM), adds swap on 1 GB shapes, stores `.env` with mode 600, runs doctor, and installs the `ultralight-runner` systemd service (starts on boot, restarts on crash). Runs keep working with your PC off.
+- **Demo video** (65 s, royalty-free audio) embedded in the Owner console, served from `/static/demo.mp4`.
 - One active run per SAP user, since WebGUI allows one dialog session per logon.
 
 ## Routes
@@ -36,12 +42,21 @@ Cloudflare Workers cannot run a browser, so the runner must be a PC, VM or CI bo
 | `GET /api/pack` | none | Task list |
 | `GET /api/me/accounts`, `GET /api/me/plan/:sapUser` | approved | Granted accounts, generated plan |
 | `GET/POST /api/jobs`, `GET /api/jobs/:id`, `/plan`, `/frame`, `POST /commands`, `GET /evidence/:eid` | approved | Runs, live frame, canvas commands, evidence |
-| `/api/admin/*` | owner/admin | Users, grants, accounts, runner tokens, settings, audit |
-| `/api/runner/*` | runner token | Claim, state and command sync, frames, evidence |
+| `GET /api/me/sheet/:sapUser` | approved | Task sheet: values and how-to-check per task |
+| `GET /api/me/readiness` | approved | Runners (host details owner-only), accounts, last validate result per task |
+| `GET /api/me/docs`, `GET /api/me/docs/:id/:idx` | approved | Uploaded task PDF metadata and chunks |
+| `/api/admin/*` | owner/admin | Users, grants, accounts, runner tokens, settings, audit, `POST/PUT/DELETE /admin/docs` |
+| `/api/runner/*` | runner token | Hello (self-report), claim, state and command sync, frames, evidence |
 
 ## Data (D1)
 
-`users`, `sessions`, `sap_accounts`, `grants`, `runners`, `jobs`, `events`, `frames` (one live frame per job), `commands`, `evidence`, `settings`, `audit`. Schema in `migrations/0001_init.sql`.
+`users`, `sessions`, `sap_accounts`, `grants`, `runners`, `jobs`, `events`, `frames` (one live frame per job), `commands`, `evidence`, `settings`, `audit`, `runner_info`, `docs`, `doc_chunks`. Schema in `migrations/0001_init.sql` and `0002_docs_runner_info.sql`. The API also creates the 0002 tables on first request (`CREATE TABLE IF NOT EXISTS`), so a deploy that skipped the migration still works.
+
+## Updating to this version
+
+1. Push to `main`; Cloudflare Pages rebuilds the site. Optionally `npm run db:migrate:prod` (the API creates the new tables on its own).
+2. On every runner machine: `git pull && cd runner && npm install`, restart, then `npm run doctor`. Readiness flags runners that still report 1.0 or 1.1.
+3. Owner console: upload the task PDF and fill the task-to-page map.
 
 ## Setup
 
@@ -63,6 +78,10 @@ cd runner && npm run setup && cp .env.example .env && npm start
 ```
 
 ## Validation
+
+**2026-09-27, runner 1.2.** Live validate run #3 on M53/236, LEARN-626, P/2626: all 11 checkable tasks pass in SAP (1, 2, 4, 6, 7, 8, 10, 11, 12, 13, 14); tasks 3, 5, 9 are screenshot-only. Doctor 10/10. `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22 (task sheet, validate plan, read-only enforcement, runner hello, readiness, 2.5 MB PDF round trip byte-identical, non-PDF and oversize rejection, user vs owner access). Browser QA: no console errors on Readiness, Task sheet, canvas drawer, Owner console, Setup guide.
+
+Earlier:
 
 Run it yourself against your own account (read-only, changes nothing in SAP):
 

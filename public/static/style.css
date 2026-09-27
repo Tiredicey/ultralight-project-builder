@@ -234,7 +234,7 @@ video.demo { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r); backgro
 .doc-item { border-top: 1px solid var(--line); padding-top: .7rem; gap: .4rem; }
 
 @media print {
-  :root, :root[data-theme='dark'] { --bg: #fff; --surface: #fff; --surface-2: #f3f3f3; --line: #cfcfcf; --text: #111; --muted: #555; --accent: #6b5020; --accent-soft: #f4ecdc; --ok-soft: #e4f1e8; --err-soft: #f6e2e2; --warn-soft: #f6ecd8; --shadow: none; }
+  :root, :root[data-theme='dark'], :root:not([data-theme='light']) { --bg: #fff; --surface: #fff; --surface-2: #f3f3f3; --line: #cfcfcf; --text: #111; --muted: #555; --accent: #6b5020; --accent-soft: #f4ecdc; --ok-soft: #e4f1e8; --err-soft: #f6e2e2; --warn-soft: #f6ecd8; --shadow: none; }
   .side, .topbar, .no-print, .toast, .drawer, .pdfview { display: none !important; }
   .shell { display: block; }
   .main { padding: 0; }
