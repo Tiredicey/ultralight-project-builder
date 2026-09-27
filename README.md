@@ -62,23 +62,55 @@ Runner:
 cd runner && npm run setup && cp .env.example .env && npm start
 ```
 
-## Verified in this build (2026-09-26)
+## Validation
 
-| Check | Result | How |
+Run it yourself against your own account (read-only, changes nothing in SAP):
+
+```bash
+cd runner && npm run validate            # all checks
+cd runner && npm run validate project    # tree, WBS, milestones, release, 0135
+cd runner && npm run validate costs      # cost report only
+bash scripts/e2e-local.sh                # control site API against wrangler dev on :3000
+```
+
+### Results on 2026-09-27 (M53, client 236, LEARN-626, P/2626)
+
+| Area | Result | Source |
 |---|---|---|
-| `m53p.ucc.cloud` reachable | Yes, 141.44.39.20, HTTP 200 | `curl` from sandbox |
-| WebGUI login ids | `#sap-user`, `#sap-password`, `LOGON_BUTTON`, client field prefilled 236, system "M53 - Global Bike 4.3", S/4HANA 2023 | Live DOM read with Playwright |
-| Owner gate | Pending user gets 403 on jobs and admin until approved | API test |
-| Runner claim, frame stream, DOM map | Frame of the real SAP logon page with 6 mapped elements | Local runner |
-| Canvas input | Remote click plus typing put `LEARN-626` into the SAP User field; password value not captured | Frame read-back |
-| Abort | Job ends `aborted`, summary recorded | API test |
+| Grading monitor | Steps 1, 2, 4, 6, 7, 10, 11 green, 96 % | User screenshot. Step 13 grading not re-read after the invoice. |
+| Live read-back | **38/38** | `runner/validation/results.json` |
+| Project tree | 6 WBS, 16 activities (14 + 0045 + 0135), no strays, PS text `PH-626-1`, milestones 00004/00005/00006 | `validate project` |
+| Relationships | 22 links read back from each successor's Relationship Overview | `validate rels` |
+| Release | System status `REL` | `validate project` |
+| Task 10 | 0135 costs `8,000.00`, flexible duration ticked | `validate project` |
+| Cost report | Actual 11,450.00 / Commitment 5,000.00 / Total 16,450.00 / Plan 49,433.14. Labor 1,750.00, other operating expenses 9,700.00 actual vs 8,000.00 plan | `validate costs` |
+| Control site API | **13/13**: owner gate, pending 403 on jobs and admin, allowlist, bad LEARN id rejected, runner token, one job per SAP user, bad runner token refused, runner claim | `scripts/e2e-local.sh` |
+| Runner through the site | Job #1, Task 12 in observe mode: login, report executed, totals parsed, screenshot + DOM evidence stored, live frame (97 mapped elements) | Local run against wrangler dev |
+
+### What changed in runner 1.1 and why
+
+Each change fixes a failure seen live on M53:
+
+| Problem seen live | Fix |
+|---|---|
+| Ticking **Scs** in the relationship grid did not persist; one wrong link got saved | Relationships are entered from the successor as **predecessors** (Scs unticked), 2 save batches, then read back (`relationsPred`) |
+| Grid values vanished on Enter | Every cell is committed with **Tab** before Enter (`putCell`) |
+| Tree clicks hit the wrong node after scrolling | Every tree selection is checked against the **header activity number** and retried; far rows get sibling WBS nodes collapsed first (`selectTreeObject`) |
+| The old selector matched `[role=treeitem]`, which does not exist in this tree | Rows are read as paired `mrss-cont-left/none-Row-N` tables (`treeRows`) |
+| PS text language went into the format column | Language is typed into the `PLTXSPRAS-SPRAS` column reached by Tab; SAPScript format picked in the popup; editor text saved with F3 (`psText`) |
+| Milestone flags were a manual step | Milestone node is selected in the tree and the three checkboxes (trend, progress, "Reference for offset") are ticked by title (`milestone`) |
+| Field "Amount" does not exist on activity 0135 | Field is "Costs in the activity"; flag is "Indicator: flexible duration" (`activityFields`) |
+| CN25 network was a manual step | Network number comes from the project tree; Final and Completed are unticked, dates cleared, 35 h entered, 45 h remaining checked before save (`confirmActivity`) |
+| Cost report field labels did not match | Uses the real labels: Project definition, Controlling Area, Version, Fiscal Year ×2, Period Block ×2 (`costReport`) |
+| Save flagged "Project P/2626 is being changed" as failure | That is the WebGUI success text after Ctrl+S in CJ20N; a re-read confirms the data |
 
 ## Not confirmed
 
-- **A full automated run of Tasks 1 to 14 against SAP.** Not executed here. I did not have a confirmed current password for any account and did not want to risk locking a real user. The grid, tab, tree and menu selectors come from the previous session notes (grid ids like `M0:46:1:4:1:2B256:1`, Tab-commit) and generic WebGUI roles. They are not re-verified against this system. Steps that cannot locate their target hand off to the operator instead of guessing.
-- **Tasks 3 and 5 network graph.** Earlier notes say the Fiori app was not assigned to automation sessions. The pack uses `CJ2B` with a manual hand-off; that transaction's availability on M53 is not confirmed.
-- **Task 13 transaction.** The sheet names the Fiori app "Create Incoming Invoices"; the pack uses `FB60`. Not confirmed that the grading monitor accepts an FB60 posting.
-- **Cloudflare deployment.** Not deployed from this session; no Cloudflare token was configured.
+- **Tasks 1 and 13 through the runner end-to-end.** Both were already done in SAP (monitor green, invoice visible in the report), so a write run would duplicate data. Task 1 WBS creation and Task 13 FB60 posting still use the original generic steps and hand off to the operator if they miss.
+- **Task 2 `extService` recipe.** Written from the verified manual flow (grid `2B257`, service-spec lines 10 and 20, total 5,000.00), but not replayed, because 0045 already exists and the recipe skips it.
+- **Tasks 3 and 5 network graph.** The pack keeps `CJ2B` with a manual hand-off. I did not open `CJ2B` on M53.
+- **Step 13 on the grading monitor.** The report shows 9,700.00 posted. Whether the monitor turns Step 13 green is only visible to the user.
+- **Cloudflare deployment.** Not deployed from this session.
 
 ## Stack
 

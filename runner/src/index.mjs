@@ -178,7 +178,7 @@ class Job {
     this.ev('ok', `Evidence captured: ${caption}`, null)
   }
 
-  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss'].includes(s.op) && !(s.op === 'recipe' && ['treeSelect', 'costReport'].includes(s.name)) }
+  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss', 'popupField'].includes(s.op) && !(s.op === 'recipe' && ['treeSelect', 'costReport'].includes(s.name)) }
 
   async verify(note, extra = {}) {
     const sb = await statusbar(this.page)
