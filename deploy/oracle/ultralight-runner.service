@@ -1,0 +1,23 @@
+[Unit]
+Description=Ultralight Project Builder runner (Playwright on SAP WebGUI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ultralight
+WorkingDirectory=/opt/ultralight/runner
+ExecStart=/usr/bin/env node src/index.mjs
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=HOME=/home/ultralight
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ultralight/.browsers
+# Chromium can grow large on long runs; restart cleanly instead of letting the kernel kill the VM.
+MemoryMax=1800M
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

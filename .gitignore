@@ -11,3 +11,4 @@ logs/
 .DS_Store
 runner/validation/*.png
 .work/
+.browsers/
