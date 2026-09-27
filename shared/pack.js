@@ -247,3 +247,66 @@ export const planFor = (sapUser, taskIds) => {
 }
 
 export const taskSummary = () => TASKS.map(({ id, title, role, area, txn, shot }) => ({ id, title, role, area, txn, shot }))
+
+// What a correct result looks like in SAP, per task. Used by the task sheet ("how to check") and by
+// the runner's read-only validate op, which runs the listed check ids and reports pass/fail per task.
+export const CHECKS = {
+  1: { how: (d) => `CJ20N, open ${d.project}: tree shows ${d.project} and ${d.project}-1 to -5. Responsibilities tab shows the cost centres, controlling area ${d.controllingArea}.`, ids: ['wbs'] },
+  2: { how: () => 'Tree under the network shows activities 0010 to 0140, plus 0045 (external) and 0135 (primary cost). 0045 has service lines 10 and 20.', ids: ['activities'] },
+  3: { how: () => 'Screenshot only. Network graph before relationships: activities side by side with no links.', ids: [], evidenceOnly: true },
+  4: { how: () => 'Relationship Overview on each successor shows its predecessors, 22 finish-to-start links in total (0070 and 0120 have four each).', ids: ['rels'] },
+  5: { how: () => 'Screenshot only. Network graph after relationships: 0010 fans out to 0020, 0030, 0040, 0045.', ids: [], evidenceOnly: true },
+  6: { how: (d) => `PS text ${d.psText} under ${d.project}. Milestones 00004, 00005, 00006 under 0070, 0120, 0140.`, ids: ['pstext', 'milestones'] },
+  7: { how: () => 'Project definition Basic Data: System Status contains REL.', ids: ['release'] },
+  8: { how: () => 'S_ALR_87013542 runs with plan values for the project.', ids: ['reportRuns'] },
+  9: { how: (d) => `CN41N shows the structure of ${d.project}. Screenshot for the report.`, ids: [], evidenceOnly: true },
+  10: { how: () => 'Activity 0135: Costs in the activity 8,000.00 and Flexible duration ticked. Report plan line 6300000 shows 8,000.00.', ids: ['task10', 'plan8000'] },
+  11: { how: () => 'Confirmation on 0010: 35 h actual, 45 h remaining. Report actual 8000000 Labor 1,750.00.', ids: ['labor'] },
+  12: { how: () => 'Cost report: actual 1,750.00 EUR after the confirmation.', ids: ['labor'] },
+  13: { how: (d) => `FB60 document for supplier ${d.supplier}, 9,700.00 EUR on activity 0135. Report actual 6300000 shows 9,700.00.`, ids: ['invoice'] },
+  14: { how: () => 'Cost report: all cost elements actual 11,450.00 EUR (1,750 + 9,700).', ids: ['finalActual'] }
+}
+
+// Printable task sheet: every value the pack types, per task, plus how to check it by hand.
+export const taskSheet = (sapUser) => {
+  const sfx = suffixOf(sapUser)
+  if (!sfx) throw new Error('SAP user must look like LEARN-###')
+  const d = dataFor(sfx)
+  return {
+    sapUser: `LEARN-${sfx}`, project: d.project, data: d,
+    tasks: TASKS.map((t) => ({
+      id: t.id, title: t.title, role: t.role, area: t.area, txn: t.txn, shot: t.shot,
+      how: CHECKS[t.id].how(d), checkIds: CHECKS[t.id].ids, evidenceOnly: !!CHECKS[t.id].evidenceOnly,
+      steps: t.steps(d).map((s, i) => ({ key: `${t.id}.${i + 1}`, op: s.op, label: s.label || (s.op === 'shot' ? `Screenshot: ${s.caption}` : s.op), instruction: s.instruction || null, values: sheetValues(s) }))
+    }))
+  }
+}
+
+const sheetValues = (s) => {
+  if (s.values) return s.values
+  if (s.rows) return { rows: s.rows.map((r) => Object.values(r).map((v) => (v === true ? 'X' : v)).join(' · ')) }
+  if (s.fields) return Object.fromEntries(s.fields.map(([l, v]) => [l[0], v]))
+  if (s.value) return { [s.titles?.[0] || 'Value']: s.value }
+  if (s.op === 'recipe' && s.args) {
+    const a = s.args
+    if (s.name === 'relationsPred') return { Activity: a.act, Predecessors: a.preds.join(', '), Type: 'FS' }
+    if (s.name === 'psText') return { WBS: a.wbs, 'Text type': a.st, Description: a.desc, Language: a.lang }
+    if (s.name === 'milestone') return { Activity: a.act, Usage: a.usage, Description: a.desc, Flags: 'trend, progress, offset to finish' }
+    if (s.name === 'costReport') return { Project: a.project, 'CO area': a.coArea, ...(a.expect ? { Expect: a.expect } : {}) }
+    if (s.name === 'confirmActivity') return { Activity: a.act, 'Actual work': `${a.actual} h`, Remaining: `${a.remaining} h` }
+    if (s.name === 'activityFields') return { Activity: a.act, Costs: '8000', 'Flexible duration': 'ticked' }
+  }
+  if (s.op === 'shot') return { Screenshot: s.name }
+  if (s.op === 'txn') return { Transaction: s.code }
+  return null
+}
+
+// Plan for a read-only validate job: login, then one validate step per selected task.
+export const validatePlan = (sapUser, taskIds) => {
+  const sfx = suffixOf(sapUser)
+  if (!sfx) throw new Error('SAP user must look like LEARN-###')
+  const d = dataFor(sfx)
+  const ids = (taskIds && taskIds.length ? taskIds : TASKS.map((t) => t.id)).map(Number)
+  const steps = TASKS.filter((t) => ids.includes(t.id)).map((t, idx) => ({ op: 'validate', task: t.id, checks: CHECKS[t.id].ids, evidenceOnly: !!CHECKS[t.id].evidenceOnly, label: `Check task ${t.id}: ${t.title}`, key: `${t.id}.v`, idx }))
+  return { data: d, steps, validate: true }
+}
