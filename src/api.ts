@@ -2,7 +2,7 @@ import { Hono, type Context, type Next } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { now, randomToken, sha256, hashPassword, verifyPassword, emailOk } from './lib/auth'
 import { seal, open } from './lib/crypto'
-import { planFor, taskSummary, suffixOf, dataFor, SAP_CLIENT, SAP_HOST } from '../shared/pack.js'
+import { planFor, taskSummary, suffixOf, dataFor, taskSheet, validatePlan, SAP_CLIENT, SAP_HOST } from '../shared/pack.js'
 
 export type Bindings = { DB: D1Database; APP_SECRET?: string; SETUP_KEY?: string }
 type User = { id: number; email: string; name: string; role: string; status: string }
@@ -13,6 +13,22 @@ const SESSION_DAYS = 14
 const FRAME_MAX = 1_800_000
 const EVIDENCE_MAX = 1_900_000
 const ACTIVE = ['queued', 'claimed', 'running', 'paused', 'waiting']
+export const RUNNER_LATEST = '1.2.0'
+const DOC_CHUNK = 900_000
+const DOC_MAX = 20 * 1024 * 1024
+
+// Tables added after 0001. CREATE IF NOT EXISTS, so a deploy that skipped `db:migrate:prod` still works.
+let ensured = false
+const ensureSchema = async (c: Context<Env>) => {
+  if (ensured) return
+  await c.env.DB.batch([
+    c.env.DB.prepare('CREATE TABLE IF NOT EXISTS runner_info (runner_id INTEGER PRIMARY KEY, info TEXT NOT NULL, updated_at INTEGER NOT NULL)'),
+    c.env.DB.prepare("CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, size INTEGER NOT NULL, chunks INTEGER NOT NULL, task_pages TEXT NOT NULL DEFAULT '{}', complete INTEGER NOT NULL DEFAULT 0, uploaded_by INTEGER, created_at INTEGER NOT NULL)"),
+    c.env.DB.prepare('CREATE TABLE IF NOT EXISTS doc_chunks (doc_id INTEGER NOT NULL, idx INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (doc_id, idx))')
+  ])
+  ensured = true
+}
+const planOf = (sapUser: string, tasks: number[], mode: string) => (mode === 'validate' ? validatePlan(sapUser, tasks) : planFor(sapUser, tasks))
 
 const secretOf = (c: Context<Env>) => c.env.APP_SECRET || 'local-dev-secret-change-me'
 const j = <T>(s: string | null | undefined, d: T): T => { try { return s ? JSON.parse(s) : d } catch { return d } }
@@ -81,6 +97,7 @@ const jobView = (job: any) => {
 export const api = new Hono<Env>()
 
 api.onError((err, c) => c.json({ error: err.message || 'Server error' }, 500))
+api.use('*', async (c, next) => { await ensureSchema(c); await next() })
 
 api.get('/health', async (c) => {
   const users = await c.env.DB.prepare('SELECT COUNT(*) n FROM users').first<{ n: number }>()
@@ -160,6 +177,46 @@ api.get('/me/plan/:sapUser', async (c) => {
   return c.json(planFor(c.req.param('sapUser'), tasks))
 })
 
+api.get('/me/sheet/:sapUser', (c) => c.json(taskSheet(c.req.param('sapUser'))))
+
+// Readiness: everything that must be true before a run can succeed, from the caller's point of view.
+api.get('/me/readiness', async (c) => {
+  const u = c.get('user')
+  const priv = u.role === 'owner' || u.role === 'admin'
+  const q = priv
+    ? c.env.DB.prepare('SELECT * FROM sap_accounts ORDER BY sap_user')
+    : c.env.DB.prepare('SELECT a.* FROM sap_accounts a JOIN grants g ON g.account_id = a.id WHERE g.user_id = ? ORDER BY a.sap_user').bind(u.id)
+  const accounts = (await q.all<any>()).results
+  const runners = (await c.env.DB.prepare('SELECT r.id, r.name, r.accounts, r.version, r.last_seen, i.info, i.updated_at FROM runners r LEFT JOIN runner_info i ON i.runner_id = r.id WHERE r.revoked = 0 ORDER BY r.id DESC').all<any>()).results
+    .map((r) => ({ id: r.id, name: r.name, accounts: j<string[]>(r.accounts, []), version: r.version, online: !!r.last_seen && now() - r.last_seen < 30000, lastSeen: r.last_seen, info: j<any>(r.info, null), infoAt: r.updated_at }))
+  const runs = (await (priv
+    ? c.env.DB.prepare("SELECT * FROM jobs WHERE status IN ('done', 'failed', 'aborted') ORDER BY id DESC LIMIT 200")
+    : c.env.DB.prepare("SELECT * FROM jobs WHERE user_id = ? AND status IN ('done', 'failed', 'aborted') ORDER BY id DESC LIMIT 200").bind(u.id)).all<any>()).results
+  const out = []
+  for (const a of accounts) {
+    const cover = runners.filter((r) => !r.accounts.length || r.accounts.includes(a.sap_user))
+    const val = runs.find((x) => x.sap_user === a.sap_user && x.mode === 'validate' && x.status === 'done')
+    const last = runs.find((x) => x.sap_user === a.sap_user && x.mode !== 'validate')
+    const tasks: Record<string, any> = {}
+    if (val) for (const e of (await c.env.DB.prepare("SELECT step_key, level, message, created_at FROM events WHERE job_id = ? AND step_key LIKE '%.v' ORDER BY id").bind(val.id).all<any>()).results) tasks[e.step_key.split('.')[0]] = { level: e.level, message: e.message, at: e.created_at }
+    out.push({
+      sapUser: a.sap_user, label: a.label, project: suffixOf(a.sap_user) ? dataFor(suffixOf(a.sap_user)!).project : null,
+      runners: cover.map((r) => ({ id: r.id, name: r.name, online: r.online, holdsPassword: !!r.info?.accountsWithPassword?.includes(a.sap_user) })),
+      lastRun: last ? jobView(last) : null,
+      validation: val ? { jobId: val.id, at: val.finished_at, result: j(val.result, null), tasks } : null
+    })
+  }
+  return c.json({ latest: RUNNER_LATEST, runners: priv ? runners : runners.map(({ info, ...r }) => ({ ...r, info: info ? { version: info.version, sap: info.sap, sapHost: info.sapHost } : null })), accounts: out, sap: { host: SAP_HOST, client: SAP_CLIENT } })
+})
+
+api.get('/me/docs', async (c) => c.json({ docs: (await c.env.DB.prepare('SELECT id, name, size, chunks, task_pages, created_at FROM docs WHERE complete = 1 ORDER BY id DESC').all<any>()).results.map((d) => ({ ...d, task_pages: j(d.task_pages, {}) })) }))
+
+api.get('/me/docs/:id/:idx', async (c) => {
+  const r = await c.env.DB.prepare('SELECT c.body FROM doc_chunks c JOIN docs d ON d.id = c.doc_id WHERE d.complete = 1 AND c.doc_id = ? AND c.idx = ?').bind(Number(c.req.param('id')), Number(c.req.param('idx'))).first<{ body: string }>()
+  if (!r) return c.json({ error: 'Not found' }, 404)
+  return c.body(r.body, 200, { 'content-type': 'text/plain', 'cache-control': 'private, max-age=86400' })
+})
+
 api.get('/jobs', async (c) => {
   const u = c.get('user')
   const all = c.req.query('all') === '1' && (u.role === 'owner' || u.role === 'admin')
@@ -182,8 +239,8 @@ api.post('/jobs', async (c) => {
   const busy = await c.env.DB.prepare(`SELECT id FROM jobs WHERE sap_user = ? AND status IN (${ACTIVE.map(() => '?').join(',')})`).bind(sapUser, ...ACTIVE).first<{ id: number }>()
   if (busy) return c.json({ error: `Job #${busy.id} is already active on ${sapUser}. SAP allows one dialog session per run.`, jobId: busy.id }, 409)
   const tasks = (Array.isArray(b.tasks) ? b.tasks : []).map(Number).filter((n: number) => n >= 1 && n <= 14)
-  const plan = planFor(sapUser, tasks)
-  const mode = ['assist', 'auto', 'observe'].includes(b.mode) ? b.mode : 'assist'
+  const mode = ['assist', 'auto', 'observe', 'validate'].includes(b.mode) ? b.mode : 'assist'
+  const plan = planOf(sapUser, tasks, mode)
   const secret = b.password ? await seal(secretOf(c), String(b.password)) : null
   const r = await c.env.DB.prepare('INSERT INTO jobs (user_id, account_id, sap_user, tasks, mode, status, step_total, secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(u.id, acc.id, sapUser, JSON.stringify(tasks.length ? tasks : plan.steps.map((s: any) => s.task).filter((v: number, i: number, a: number[]) => a.indexOf(v) === i)), mode, 'queued', plan.steps.length, secret, now()).run()
@@ -205,7 +262,7 @@ api.get('/jobs/:id', async (c) => {
 api.get('/jobs/:id/plan', async (c) => {
   const job = await jobFor(c, Number(c.req.param('id')))
   if (!job) return c.json({ error: 'Not found' }, 404)
-  return c.json(planFor(job.sap_user, j(job.tasks, [])))
+  return c.json(planOf(job.sap_user, j(job.tasks, []), job.mode))
 })
 
 api.get('/jobs/:id/frame', async (c) => {
@@ -226,7 +283,7 @@ api.post('/jobs/:id/commands', async (c) => {
   const allowed = ['click', 'dblclick', 'type', 'key', 'scroll', 'pause', 'resume', 'step', 'skip', 'retry', 'continue', 'abort', 'capture', 'goto', 'fill']
   const list = (Array.isArray(b) ? b : [b]).filter((x: any) => allowed.includes(x?.type)).slice(0, 40)
   if (!list.length) return c.json({ error: 'No valid command' }, 400)
-  if (job.mode === 'observe' && list.some((x: any) => ['click', 'dblclick', 'type', 'key', 'scroll', 'goto', 'fill'].includes(x.type))) return c.json({ error: 'Observe mode is read-only' }, 403)
+  if (['observe', 'validate'].includes(job.mode) && list.some((x: any) => ['click', 'dblclick', 'type', 'key', 'scroll', 'goto', 'fill'].includes(x.type))) return c.json({ error: `${job.mode === 'validate' ? 'Validate' : 'Observe'} mode is read-only` }, 403)
   const u = c.get('user')
   const stmt = c.env.DB.prepare('INSERT INTO commands (job_id, user_id, type, payload, created_at) VALUES (?, ?, ?, ?, ?)')
   await c.env.DB.batch(list.map((x: any) => { const { type, ...payload } = x; return stmt.bind(job.id, u.id, type, JSON.stringify(payload), now()) }))
@@ -316,6 +373,50 @@ api.post('/admin/settings', async (c) => {
   return c.json({ ok: true })
 })
 
+api.post('/admin/docs', async (c) => {
+  const b = await c.req.json().catch(() => ({}))
+  const size = Number(b.size) || 0
+  if (!/\.pdf$/i.test(String(b.name || '')) || size <= 0 || size > DOC_MAX) return c.json({ error: 'Upload a PDF up to 20 MB' }, 400)
+  const chunks = Math.ceil((Math.ceil(size / 3) * 4) / DOC_CHUNK)
+  const r = await c.env.DB.prepare('INSERT INTO docs (name, size, chunks, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?)').bind(String(b.name).slice(0, 120), size, chunks, c.get('user').id, now()).run()
+  return c.json({ id: Number(r.meta.last_row_id), chunks, chunkSize: DOC_CHUNK })
+})
+
+api.put('/admin/docs/:id/:idx', async (c) => {
+  const id = Number(c.req.param('id')), idx = Number(c.req.param('idx'))
+  const d = await c.env.DB.prepare('SELECT * FROM docs WHERE id = ?').bind(id).first<any>()
+  if (!d || !(idx >= 0 && idx < d.chunks)) return c.json({ error: 'Not found' }, 404)
+  const body = await c.req.text()
+  if (!body || body.length > DOC_CHUNK || !/^[A-Za-z0-9+/=]+$/.test(body)) return c.json({ error: 'Bad chunk' }, 400)
+  if (idx === 0 && !atob(body.slice(0, 8)).startsWith('%PDF')) return c.json({ error: 'That file is not a PDF' }, 400)
+  await c.env.DB.prepare('INSERT OR REPLACE INTO doc_chunks (doc_id, idx, body) VALUES (?, ?, ?)').bind(id, idx, body).run()
+  const n = (await c.env.DB.prepare('SELECT COUNT(*) n FROM doc_chunks WHERE doc_id = ?').bind(id).first<{ n: number }>())?.n || 0
+  if (n === d.chunks && !d.complete) { await c.env.DB.prepare('UPDATE docs SET complete = 1 WHERE id = ?').bind(id).run(); await audit(c, c.get('user').id, 'admin.doc.upload', { id, name: d.name, size: d.size }) }
+  return c.json({ ok: true, complete: n === d.chunks })
+})
+
+api.post('/admin/docs/:id', async (c) => {
+  const b = await c.req.json().catch(() => ({}))
+  const pages: Record<string, number> = {}
+  for (const [k, v] of Object.entries(b.taskPages || {})) if (Number(k) >= 1 && Number(k) <= 14 && Number(v) >= 1) pages[k] = Math.floor(Number(v))
+  await c.env.DB.prepare('UPDATE docs SET task_pages = ? WHERE id = ?').bind(JSON.stringify(pages), Number(c.req.param('id'))).run()
+  return c.json({ ok: true, taskPages: pages })
+})
+
+api.delete('/admin/docs/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  await c.env.DB.batch([c.env.DB.prepare('DELETE FROM doc_chunks WHERE doc_id = ?').bind(id), c.env.DB.prepare('DELETE FROM docs WHERE id = ?').bind(id)])
+  await audit(c, c.get('user').id, 'admin.doc.remove', { id })
+  return c.json({ ok: true })
+})
+
+api.post('/runner/hello', async (c) => {
+  const r = c.get('runner')
+  const b = await c.req.json().catch(() => ({}))
+  if (b.info && !b.info.doctor) await c.env.DB.prepare('INSERT INTO runner_info (runner_id, info, updated_at) VALUES (?, ?, ?) ON CONFLICT(runner_id) DO UPDATE SET info = excluded.info, updated_at = excluded.updated_at').bind(r.id, JSON.stringify(b.info).slice(0, 8000), now()).run()
+  return c.json({ ok: true, name: r.name, accounts: j<string[]>(r.accounts, []), latest: RUNNER_LATEST })
+})
+
 api.post('/runner/claim', async (c) => {
   const r = c.get('runner')
   const b = await c.req.json().catch(() => ({}))
@@ -331,7 +432,7 @@ api.post('/runner/claim', async (c) => {
   const password = job.secret ? await open(secretOf(c), job.secret).catch(() => null) : null
   await c.env.DB.prepare('UPDATE jobs SET secret = NULL WHERE id = ?').bind(job.id).run()
   await event(c, job.id, 'info', `Claimed by runner "${r.name}"`)
-  return c.json({ job: { id: job.id, sapUser: job.sap_user, mode: job.mode, tasks: j(job.tasks, []), password }, plan: planFor(job.sap_user, j(job.tasks, [])) })
+  return c.json({ job: { id: job.id, sapUser: job.sap_user, mode: job.mode, tasks: j(job.tasks, []), password }, plan: planOf(job.sap_user, j(job.tasks, []), job.mode) })
 })
 
 const runnerJob = async (c: Context<Env>) => {

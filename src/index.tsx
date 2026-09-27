@@ -12,6 +12,8 @@ app.use('*', secureHeaders({
     fontSrc: ["'self'", 'https://fonts.gstatic.com'],
     imgSrc: ["'self'", 'data:', 'blob:'],
     connectSrc: ["'self'"],
+    frameSrc: ["'self'", 'blob:'],
+    mediaSrc: ["'self'"],
     frameAncestors: ["'none'"],
     baseUri: ["'self'"],
     formAction: ["'self'"]
