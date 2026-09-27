@@ -649,6 +649,20 @@ RUNNER_TOKEN=ucr_xxxxxxxx
 SAP_ACCOUNTS=LEARN-###:password,LEARN-###:otherpassword</pre>Passwords here stay on the runner. Leave them out to require the password per run.</li>
       <li>Start it:<pre>npm start</pre>The Owner console shows it online within 5 seconds.</li>
     </ol></section>
+    <section class="card"><h2>Always on: Oracle Cloud runner</h2><ol>
+      <li>Oracle console → Compute → <b>Create instance</b>. Image <b>Ubuntu 22.04</b> or <b>24.04</b>. Shape <b>VM.Standard.A1.Flex</b> (Always Free Ampere, 1 OCPU / 6 GB is plenty) or VM.Standard.E2.1.Micro (1 GB, the script adds swap). Keep the default public subnet, add your SSH key.</li>
+      <li>No inbound ports are needed. The runner only makes outbound HTTPS calls to this site and to <code>m53p.ucc.cloud</code>.</li>
+      <li>Owner console → Runners → create a token named <code>oracle</code>. Revoke the token of the runner on your PC once Oracle shows online, so only one runner claims jobs.</li>
+      <li>SSH in and run:<pre>curl -fsSL https://raw.githubusercontent.com/Tiredicey/ultralight-project-builder/main/deploy/oracle/setup.sh | bash</pre>It installs Node 20 and Chromium, asks for the site URL, the token and <code>LEARN-###:password</code>, runs the self-check, and installs a systemd service that starts on boot.</li>
+      <li>Open <b>Readiness</b>: the Oracle runner shows online with its host name and SAP reachability. You can shut your PC down.</li>
+      <li>Logs <code>sudo journalctl -u ultralight-runner -f</code>. Update by running the same command again.</li>
+    </ol></section>
+    <section class="card"><h2>Check your setup</h2><ol>
+      <li>On the runner machine: <code>cd runner && npm run doctor</code>. It checks Node, <code>.env</code>, the token against this site, SAP reachability and Chromium, and prints a fix for every failure. It does not log in to SAP.</li>
+      <li>Here: <b>Readiness</b> lists every runner (version, host, SAP reachability) and every SAP account you can use.</li>
+      <li>Press <b>Validate all tasks in SAP</b> there, or start a run in <b>Validate</b> mode. The runner logs in, reads the project tree, relationships, activity 0135 and the cost report, and marks each task done or not done. Nothing is saved.</li>
+      <li><b>Task sheet</b> lists every value per task with how to check it by hand, and prints to PDF.</li>
+    </ol></section>
     <section class="card"><h2>Running a pack</h2><ol>
       <li>Run pack → pick account and tasks → mode. Assist is the safe default.</li>
       <li>The canvas streams the real SAP WebGUI page. Boxes are the captured DOM fields; hover shows their SAP titles.</li>
