@@ -8,7 +8,7 @@
     {
       "binding": "DB",
       "database_name": "ultralight-builder-production",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "3c7e4c32-e5c9-46b9-a730-c989eff34be7",
       "migrations_dir": "migrations"
     }
   ]
