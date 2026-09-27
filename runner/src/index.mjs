@@ -1,26 +1,23 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { readFileSync, existsSync } from 'node:fs'
 import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
+import { Checker } from './checks.mjs'
+import { loadEnv, localAccounts } from './env.mjs'
+import { VERSION } from './version.mjs'
+import { hostname, cpus, totalmem } from 'node:os'
 
 const toRe = (v) => (v instanceof RegExp ? v : new RegExp(String(v), 'i'))
 const reviveArgs = (a = {}) => ({ ...a, flags: a.flags ? a.flags.map(toRe) : a.flags, checks: a.checks ? a.checks.map(toRe) : a.checks })
 
-const VERSION = '1.1.0'
-if (existsSync(new URL('../.env', import.meta.url))) {
-  for (const line of readFileSync(new URL('../.env', import.meta.url), 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/)
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '')
-  }
-}
+loadEnv()
 
 const CONTROL = (process.env.CONTROL_URL || '').replace(/\/$/, '')
 const TOKEN = process.env.RUNNER_TOKEN || ''
 const SAP_HOST = process.env.SAP_HOST || 'm53p.ucc.cloud'
 const SAP_CLIENT = process.env.SAP_CLIENT || '236'
 const HEADLESS = process.env.HEADLESS !== 'false'
-const LOCAL = Object.fromEntries((process.env.SAP_ACCOUNTS || '').split(',').map((s) => s.trim()).filter(Boolean).map((s) => { const i = s.indexOf(':'); return i > 0 ? [s.slice(0, i).toUpperCase(), s.slice(i + 1)] : [s.toUpperCase(), ''] }))
+const LOCAL = localAccounts()
 if (!CONTROL || !TOKEN) { process.stderr.write('Set CONTROL_URL and RUNNER_TOKEN in runner/.env\n'); process.exit(1) }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -76,6 +73,7 @@ class Job {
         if (out.redo) continue
         if (out.ok) { if (out.manual) this.results.manual++; else this.results.ok++; this.ev(out.warn ? 'warn' : 'ok', out.note || s.label || s.op, s.key, { statusbar: out.statusbar, readback: out.readback }); this.idx++ }
         else if (out.skipped) { this.results.skipped++; this.ev('warn', `Skipped: ${out.reason || s.label}`, s.key); this.idx++ }
+        else if (out.soft) { this.results.failed++; this.ev('error', out.reason, s.key); this.idx++ }
         else {
           this.ev('error', out.reason || 'Step failed', s.key, { statusbar: await statusbar(this.page), popup: await popupText(this.page) })
           const d = await this.handoff({ title: `Step ${s.key} needs you`, instruction: `${s.label}. Automation could not finish this. Fix it on the canvas and press Done, or retry.`, error: out.reason, values: s.values || valuesOf(s) }, s.key)
@@ -85,7 +83,7 @@ class Job {
         }
         if (this.stepOnce) { this.paused = true; this.stepOnce = false }
       }
-      const summary = `${this.results.ok} verified, ${this.results.manual} by operator, ${this.results.skipped} skipped`
+      const summary = this.plan.validate ? `${this.results.ok} of ${this.steps.length} tasks pass in SAP${this.results.failed ? `, ${this.results.failed} not complete` : ''}` : `${this.results.ok} verified, ${this.results.manual} by operator, ${this.results.skipped} skipped`
       await this.flush(this.aborted ? 'aborted' : 'done', { result: { ...this.results, summary } })
       this.ev('info', `Finished: ${summary}`)
     } catch (e) {
@@ -132,7 +130,7 @@ class Job {
     const p = this.page
     this.activeAt = Date.now()
     const input = ['click', 'dblclick', 'type', 'key', 'scroll', 'goto', 'fill'].includes(c.type)
-    if (input && this.job.mode === 'observe') return
+    if (input && ['observe', 'validate'].includes(this.job.mode)) return
     if (input && !this.prompt && !this.paused) { this.paused = true; this.ev('info', 'Operator took control, automation paused') }
     try {
       if (c.type === 'click') await p.mouse.click(c.x, c.y)
@@ -190,6 +188,7 @@ class Job {
     const p = this.page, d = this.plan.data
     this.target = null
     if (this.observeBlocked(s)) return { skipped: true, reason: `${s.label} (observe mode is read-only)` }
+    if (s.op === 'validate') return this.validateTask(s)
     if (s.op === 'manual') {
       if (s.optional && this.job.mode === 'auto') return { skipped: true, reason: `${s.label} is optional` }
       const dcs = await this.handoff({ title: s.label, instruction: s.instruction, values: s.values }, s.key)
@@ -239,7 +238,7 @@ class Job {
     }
     if (s.op === 'menu') { const r = await clickMenu(p, s.path); if (!r.ok) return r; await handlePopups(p); return this.verify(`Menu ${s.path.join(' > ')}`) }
     if (s.op === 'expect') { const sb = await statusbar(p); return new RegExp(s.statusbar, 'i').test(sb) ? { ok: true, note: `Status bar: ${sb}`, statusbar: sb } : { ok: false, reason: `Expected status /${s.statusbar}/, got "${sb}"` } }
-    if (s.op === 'expectText') { await settle(p, 800); const found = await p.evaluate((t) => document.body.innerText.includes(t), s.text); return found ? { ok: true, note: `Found ${s.text}`, readback: s.text } : { ok: false, reason: `Value ${s.text} not on screen. Verify the report manually.` } }
+    if (s.op === 'expectText') { await settle(p, 800); const found = await p.evaluate((t) => (document.body?.innerText || '').includes(t), s.text); return found ? { ok: true, note: `Found ${s.text}`, readback: s.text } : { ok: false, reason: `Value ${s.text} not on screen. Verify the report manually.` } }
     if (s.op === 'expectField') { const f = await findByLabel(p, s.titles); if (!f) return { ok: false, reason: `Field ${s.titles[0]} not found` }; if (s.contains) return String(f.v).includes(s.contains) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected to contain ${s.contains}` }; const v = (f.v || '').replace(/[^\d.,]/g, ''); return parseFloat(v.replace(/,/g, '')) === Number(s.value) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected ${s.value}` } }
     if (s.op === 'popupField') {
       const txt = await popupText(p)
@@ -272,6 +271,17 @@ class Job {
     }
     if (s.op === 'grid') { const r = await this.gridOp(s); if (r.ok) this.rctx.dirty = true; return r }
     return { ok: false, reason: `Unknown op ${s.op}` }
+  }
+
+  // Read-only per-task check. Each group (tree, relationships, report) is read once per job and reused.
+  async validateTask(s) {
+    if (s.evidenceOnly || !s.checks.length) return { ok: true, warn: true, note: `Task ${s.task}: screenshot task, check the evidence image by eye`, readback: 'evidence only' }
+    this.checker = this.checker || new Checker(this.page, this.ctx, this.plan.data)
+    const res = await this.checker.run(s.checks)
+    const detail = res.map((r) => `${r.ok ? 'PASS' : 'FAIL'} ${r.check}: ${r.detail}`).join(' | ')
+    if (s.checks.some((c) => ['labor', 'invoice', 'finalActual', 'reportRuns', 'plan8000'].includes(c)) && !this.reportShot) { this.reportShot = true; await this.evidence('v-report', 'Validate: cost report as read', s.task).catch(() => {}) }
+    if (res.length && res.every((r) => r.ok)) return { ok: true, note: `Task ${s.task} verified in SAP: ${detail}`, readback: detail }
+    return { ok: false, soft: true, reason: `Task ${s.task} not complete in SAP: ${detail || 'no result'}` }
   }
 
   async gridOp(s) {
@@ -344,9 +354,21 @@ const valuesOf = (s) => {
   return undefined
 }
 
+const STARTED = Date.now()
+
 async function main() {
   log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'}`)
   const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage'] })
+  // Self-report for the Readiness page: host, versions, local accounts (names only) and SAP reachability.
+  const hello = async () => {
+    let sap = null
+    try { const t = Date.now(); const r = await fetch(webgui(SAP_HOST, SAP_CLIENT), { redirect: 'manual', signal: AbortSignal.timeout(15000) }); sap = { ok: r.status < 500, status: r.status, ms: Date.now() - t } } catch (e) { sap = { ok: false, error: e.message } }
+    const info = { version: VERSION, host: hostname(), platform: `${process.platform}/${process.arch}`, node: process.version, cpus: cpus().length, memMb: Math.round(totalmem() / 1048576), chromium: browser.version(), headless: HEADLESS, accounts: Object.keys(LOCAL), accountsWithPassword: Object.entries(LOCAL).filter(([, p]) => p).map(([u]) => u), sapHost: SAP_HOST, sapClient: SAP_CLIENT, sap, startedAt: STARTED }
+    const r = await call('/hello', { info }).catch((e) => { log('WARN hello', e.message); return null })
+    if (r?.latest && r.latest !== VERSION && !hello.warned) { hello.warned = true; log(`NOTE site expects runner ${r.latest}, this is ${VERSION}. git pull && npm install`) }
+  }
+  await hello()
+  setInterval(hello, 10 * 60 * 1000)
   let idle = 0
   for (;;) {
     try {
