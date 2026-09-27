@@ -100,11 +100,108 @@ export async function gotoTxn(page, ctx, code) {
 
 const reOf = (x) => (x instanceof RegExp ? x : new RegExp(`^\\s*${String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'))
 
-export async function findByLabel(page, labels, kinds = ['input']) {
+const subOf = (x) => new RegExp(String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+
+export async function findByLabel(page, labels, kinds = ['input'], nth = 0) {
   const els = (await captureDom(page)).els.filter((e) => kinds.includes(e.k))
-  for (const l of labels) { const re = reOf(l); const hit = els.find((e) => re.test(e.t) && !e.ro); if (hit) return hit }
-  for (const l of labels) { const re = reOf(l); const hit = els.find((e) => re.test(e.t)); if (hit) return hit }
+  for (const mk of [reOf, subOf]) {
+    for (const l of labels) { const re = mk(l); const hits = els.filter((e) => re.test(e.t) && !e.ro); if (hits[nth]) return hits[nth] }
+  }
+  for (const l of labels) { const re = reOf(l); const hits = els.filter((e) => re.test(e.t)); if (hits[nth]) return hits[nth] }
   return null
+}
+
+export async function clickTitle(page, names) {
+  for (const n of names) {
+    const hit = await page.evaluate((src) => { const re = new RegExp(src, 'i'); const e = [...document.querySelectorAll('[title]')].map((x) => ({ x, r: x.getBoundingClientRect() })).find(({ x, r }) => r.width > 0 && r.height > 0 && re.test(x.getAttribute('title') || '')); return e ? { x: e.r.left + e.r.width / 2, y: e.r.top + e.r.height / 2, t: e.x.getAttribute('title') } : null }, `^\\s*${String(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+    if (hit) { await page.mouse.click(hit.x, hit.y); await settle(page, 1200); return hit }
+  }
+  return null
+}
+
+export async function headerValues(page) {
+  return page.evaluate(() => [...document.querySelectorAll('input')].filter((e) => { const r = e.getBoundingClientRect(); return r.top > 100 && r.top < 200 && r.width > 20 && r.left > 300 }).map((e) => e.value.trim()))
+}
+
+export async function openProjectFromWorklist(page, project) {
+  const exact = new RegExp(`^\\s*${project.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\s*$`)
+  const end = Date.now() + 25000
+  while (Date.now() < end) {
+    if ((await page.title()).includes(project)) return true
+    const loc = page.locator('tr[id*="mrss-cont-none-Row"] td, td, span').filter({ hasText: exact })
+    const n = await loc.count()
+    for (let i = 0; i < n; i++) {
+      const box = await loc.nth(i).boundingBox().catch(() => null)
+      if (!box || box.width < 4 || box.height < 4) continue
+      await page.mouse.dblclick(box.x + Math.min(box.width / 2, 30), box.y + box.height / 2)
+      const t = Date.now() + 15000
+      while (Date.now() < t) { await sleep(700); if ((await page.title()).includes(project)) { await settle(page, 1500); return true } }
+      break
+    }
+    await sleep(1000)
+  }
+  return (await page.title()).includes(project)
+}
+
+export async function expandProjectTree(page) {
+  let clicks = 0
+  for (let i = 0; i < 60; i++) {
+    const ex = await page.evaluate(() => {
+      const root = [...document.querySelectorAll('tr[id*="mrss-cont-none-Row"]')].find((r) => /^P\/\S+$/.test((r.textContent || '').trim()))
+      if (!root) return null
+      const prefix = root.id.split('-mrss')[0]
+      const rowOf = (x) => { let n = x; while (n && !(n.tagName === 'TR' && /-mrss-cont-left-Row-\d+$/.test(n.id || ''))) n = n.parentElement; return n }
+      const ok = (x) => { const tr = rowOf(x); if (!tr || !tr.id.startsWith(`${prefix}-mrss`)) return false; const r = document.getElementById(tr.id.replace('-cont-left-', '-cont-none-')); return !!r && !!(r.textContent || '').trim() && (x.closest('td[lsdata]')?.getAttribute('lsdata') || '').includes('COLLAPSED') }
+      const e = [...document.querySelectorAll('span[title="Expand Node"]')].filter(ok).pop()
+      if (!e) return null
+      e.scrollIntoView({ block: 'center' })
+      const r = e.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })
+    if (!ex) break
+    await page.mouse.click(ex.x, ex.y); await settle(page, 900); clicks++
+  }
+  return clicks
+}
+
+export async function treeRows(page) {
+  return page.evaluate(() => {
+    const L = [...document.querySelectorAll('tr[id*="mrss-cont-left-Row"]')]
+    const R = [...document.querySelectorAll('tr[id*="mrss-cont-none-Row"]')]
+    return L.map((l) => { const pre = l.id.split('-mrss')[0]; const idx = l.id.split('-Row-')[1]; const r = document.getElementById(`${pre}-mrss-cont-none-Row-${idx}`) || R.find((x) => x.id.startsWith(pre) && x.getAttribute('iidx') === l.getAttribute('iidx')); const lv = l.querySelector('td[lv]'); const t = [...l.querySelectorAll('.lsTextView')].map((x) => (x.innerText || x.textContent || '').trim()).find(Boolean); return { pre, row: idx, iidx: l.getAttribute('iidx'), lv: lv ? lv.getAttribute('lv') : '', text: (t || l.textContent || '').replace(/\s+/g, ' ').trim().replace(/^Level \d+( Expanded| Collapsed)?/, '').trim(), ident: r ? (r.innerText || r.textContent || '').replace(/\s+/g, ' ').trim() : '' } }).filter((o) => o.text || o.ident)
+  })
+}
+
+export async function selectTreeObject(page, { ident, act, text, level }) {
+  await expandProjectTree(page)
+  const rows = await treeRows(page)
+  const hit = rows.find((r) => (ident ? r.ident === ident : act ? new RegExp(`^\\d{5,} ${act}$`).test(r.ident) : r.text.includes(text)) && (level == null || r.lv === String(level)))
+  if (!hit) return { ok: false, reason: `Tree object ${ident || act || text} not found`, rows }
+  const want = act || (ident && ident.split(' ').pop()) || null
+  const where = (h) => page.evaluate(({ pre, row }) => { const l = document.getElementById(`${pre}-mrss-cont-left-Row-${row}`); if (!l) return null; l.scrollIntoView({ block: 'center' }); const t = l.querySelector('.lsTextView') || l; const r = t.getBoundingClientRect(); let top = 0, bottom = innerHeight; for (let n = l.parentElement; n; n = n.parentElement) { const s = getComputedStyle(n); if (/hidden|auto|scroll|clip/.test(s.overflowY)) { const b = n.getBoundingClientRect(); if (b.height > 40) { top = Math.max(top, b.top); bottom = Math.min(bottom, b.bottom) } } } const y = r.top + r.height / 2; return { x: r.left + Math.min(20, r.width / 2), y, visible: r.height > 0 && y > top + 2 && y < bottom - 2 } }, h)
+  const collapseOthers = () => page.evaluate(({ pre, row }) => { const target = +row; const rows = [...document.querySelectorAll(`tr[id^="${pre}-mrss-cont-left-Row-"]`)].map((l) => ({ l, i: +l.id.split('-Row-')[1], lv: +(l.querySelector('td[lv]')?.getAttribute('lv') ?? 9) })); const lv1 = rows.filter((r) => r.lv === 1).sort((a, b) => a.i - b.i); const own = lv1.filter((r) => r.i <= target).pop(); const c = lv1.filter((r) => r !== own).map((r) => r.l.querySelector('span[title="Collapse Node"]')).find(Boolean); if (!c) return null; const b = c.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, hit)
+  let hdr = []
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let cur = (await treeRows(page)).find((r) => r.ident === hit.ident && r.text === hit.text) || hit
+    await where(cur); await sleep(700)
+    let pos = await where(cur)
+    for (let k = 0; pos && !pos.visible && k < 6; k++) {
+      Object.assign(hit, cur)
+      const c = await collapseOthers()
+      if (!c) break
+      await page.mouse.click(c.x, c.y); await settle(page, 1200)
+      cur = (await treeRows(page)).find((r) => r.ident === hit.ident && r.text === hit.text) || cur
+      pos = await where(cur)
+    }
+    if (!pos) break
+    await page.mouse.click(pos.x, pos.y); await settle(page, 1500)
+    hdr = await headerValues(page)
+    if (!want || hdr.includes(want)) break
+  }
+  if (want && !hdr.includes(want)) return { ok: false, reason: `Clicked tree row but header shows ${hdr.join(' / ') || 'nothing'}, expected ${want}` }
+  if (text && !hdr.some((h) => h.includes(text.slice(0, 20)))) return { ok: false, reason: `Header shows ${hdr.join(' / ')}, expected ${text}` }
+  const net = rows.map((r) => r.ident.match(/^(\d{5,}) \d{4}$/)).find(Boolean)
+  return { ok: true, hit, header: hdr, network: net ? net[1] : null }
 }
 
 export async function typeInto(page, el, value) {
@@ -188,8 +285,10 @@ export async function writeCell(page, gridId, row, col, value) {
     if (!el) return null
     el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     const r = el.getBoundingClientRect()
-    const chk = el.querySelector('[aria-checked]') || (el.getAttribute('aria-checked') != null ? el : null)
-    return { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2, checked: chk ? chk.getAttribute('aria-checked') : null }
+    const tw = document.getElementById(`${id}_c`)
+    const chk = tw?.getAttribute('aria-checked') != null ? tw : el.querySelector('[aria-checked]') || (el.getAttribute('aria-checked') != null ? el : null)
+    const cr = chk ? chk.getBoundingClientRect() : r
+    return { x: chk ? cr.left + cr.width / 2 : r.left + Math.min(r.width / 3, 20), y: cr.top + cr.height / 2, checked: chk ? chk.getAttribute('aria-checked') : null }
   }, { id })
   if (!res) return { ok: false, reason: `cell ${id} not in DOM` }
   if (typeof value === 'boolean') {
@@ -198,7 +297,7 @@ export async function writeCell(page, gridId, row, col, value) {
   }
   await page.mouse.click(res.x, res.y)
   await sleep(150)
-  const twin = await page.evaluate(({ id }) => { const t = document.getElementById(`${id}_c`); if (!t) return null; const r = t.getBoundingClientRect(); return r.width > 2 ? { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 } : null }, { id })
+  const twin = await page.evaluate(({ id }) => { const t = document.getElementById(`${id}_c`); if (!t) return null; const r = t.getBoundingClientRect(); return r.width > 2 ? { x: r.left + Math.min(r.width / 3, 20), y: r.top + r.height / 2 } : null }, { id })
   if (twin) { await page.mouse.click(twin.x, twin.y); await sleep(100) }
   await page.keyboard.press('Control+A')
   await page.keyboard.press('Backspace')
@@ -213,22 +312,41 @@ export async function readCell(page, gridId, row, col) {
 }
 
 export async function clickMenu(page, path) {
-  const menuBtn = await clickButton(page, [/^More$/i, /^Menu$/i, /Mehr/i])
-  if (!menuBtn) return { ok: false, reason: 'menu button not found' }
+  const mb = await page.evaluate(() => { const e = [...document.querySelectorAll('[role=button], [title], .lsButton')].find((x) => /^Menu/.test((x.innerText || x.getAttribute('title') || '').trim()) && x.getBoundingClientRect().top < 90 && x.getBoundingClientRect().width > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (!mb) return { ok: false, reason: 'menu button not found' }
+  await page.mouse.click(mb.x, mb.y); await sleep(1500)
   for (const item of path) {
-    const loc = page.locator('[role=menuitem], [role=menuitemcheckbox], .lsMnuItem, tr[ct="MI"]').filter({ hasText: new RegExp(`^\\s*${item}`, 'i') }).first()
-    if (!(await loc.count())) return { ok: false, reason: `menu item "${item}" not found` }
-    await loc.hover().catch(() => {})
-    await loc.click()
-    await sleep(500)
+    const it = await page.evaluate((src) => { const re = new RegExp(`^\\s*${src}`, 'i'); const all = [...document.querySelectorAll('[role=menuitem], [role=menuitemcheckbox], .lsMnuItem, tr[ct="MI"]')].map((e) => ({ t: e.innerText.replace(/\s+/g, ' ').trim(), r: e.getBoundingClientRect() })).filter((o) => o.r.width > 0 && re.test(o.t)); const m = all[all.length - 1]; return m ? { x: m.r.left + Math.min(40, m.r.width / 2), y: m.r.top + m.r.height / 2, t: m.t } : null }, item)
+    if (!it) return { ok: false, reason: `menu item "${item}" not found` }
+    await page.mouse.click(it.x, it.y)
+    await sleep(1500)
   }
-  await settle(page, 1200)
+  await settle(page, 1500)
   return { ok: true }
+}
+
+export async function dialogButton(page, names) {
+  for (const n of names) {
+    const hit = await page.evaluate((src) => { const re = new RegExp(`^\\s*${src}\\s*$`, 'i'); const d = [...document.querySelectorAll('[role=dialog]')].filter((e) => e.getBoundingClientRect().width > 0).pop(); if (!d) return null; const e = [...d.querySelectorAll('*')].find((x) => x.children.length <= 1 && re.test(x.textContent || '') && x.getBoundingClientRect().width > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, t: e.textContent.trim() } }, String(n))
+    if (hit) { await page.mouse.click(hit.x, hit.y); await settle(page, 1500); return hit }
+  }
+  return null
+}
+
+export async function dialogPickRow(page, text) {
+  const hit = await page.evaluate((t) => { const d = [...document.querySelectorAll('[role=dialog]')].filter((e) => e.getBoundingClientRect().width > 0).pop(); if (!d) return null; const e = [...d.querySelectorAll('td, span')].find((x) => x.children.length === 0 && x.textContent.trim() === t && x.getBoundingClientRect().width > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + Math.min(20, r.width / 2), y: r.top + r.height / 2 } }, text)
+  if (!hit) return false
+  await page.mouse.dblclick(hit.x, hit.y); await settle(page, 2000)
+  return true
 }
 
 export async function handlePopups(page, prefer = [/^Yes$/i, /^Ja$/i, /^Continue$/i, /^OK$/i, /^Save$/i]) {
   const txt = await popupText(page)
   if (!txt) return null
-  const hit = await clickButton(page, prefer)
+  const hit = await clickButton(page, prefer) || await dialogButton(page, prefer.map((r) => r.source.replace(/^\^|\$$/g, '')))
   return hit ? { popup: txt, clicked: hit.t } : { popup: txt }
+}
+
+export async function cellState(page, gridId, row, col) {
+  return page.evaluate((id) => { const t = document.getElementById(`${id}_c`); const e = t || document.getElementById(id); if (!e) return null; const r = e.getBoundingClientRect(); const ck = e.getAttribute('aria-checked'); return { v: ('value' in e ? e.value : e.innerText || '').trim(), checked: ck == null ? null : ck === 'true', x: r.left + r.width / 2, y: r.top + r.height / 2, vis: r.height > 0 } }, `${gridId}[${row},${col}]`)
 }

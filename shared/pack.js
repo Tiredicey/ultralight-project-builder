@@ -42,6 +42,10 @@ export const WBS = [
   ['2', '-5', 'Release to mass production', 'EUQM1000']
 ]
 
+export const PREDECESSORS = RELATIONSHIPS.reduce((m, [from, to]) => { (m[to] = m[to] || []).push(from); return m }, {})
+
+export const FLAG_PATTERNS = ['trend analysis', 'progress analysis', 'Reference for offset']
+
 export const MILESTONES = [
   ['0070', '00004', 'Completion: prototype'],
   ['0120', '00005', 'Completion: small series'],
@@ -103,8 +107,9 @@ export const TASKS = [
       S({ op: 'grid', label: 'Assign activities to WBS', columns: { wbs: ['WBS element', 'WBS Element'] }, fallback: { wbs: 22 }, match: { key: 'act', columns: ['Activity'] }, rows: d.activities.map(({ act, wbs }) => ({ act, wbs })) }),
       S({ op: 'key', key: 'Enter', label: 'Confirm WBS assignment' }),
       S({ op: 'shot', name: 't2-activity-overview', caption: 'Task 2: Activity Overview, activities 0010 to 0140 with duration, work, work centre and WBS' }),
-      S({ op: 'tab', names: ['External Processing', 'Ext. Processing'], label: 'External processing tab' }),
-      S({ op: 'manual', label: 'Activity 0045 with service', instruction: `Row 1: Activity ${d.external.act}, tick Service, Description "${d.external.desc}", press Enter. In Service Specification enter line 10 Engineering 1 EA 2000 and line 20 Ext. production 1 EA 3000, press Enter, then Back once.`, values: { Activity: '0045', Description: d.external.desc, 'Line 10': 'Engineering 1 EA 2000', 'Line 20': 'Ext. production 1 EA 3000' } }),
+      S({ op: 'save', label: 'Save activities', expect: 'saved|being changed|changed' }),
+      S({ op: 'openProject', project: d.project, label: `Reopen ${d.project}` }),
+      S({ op: 'recipe', name: 'extService', args: { act: d.external.act, desc: d.external.desc, lines: d.external.lines }, label: `External activity ${d.external.act} with service lines 10 and 20`, values: { Activity: '0045', Description: d.external.desc, 'Line 10': 'Engineering 1 EA 2000', 'Line 20': 'Ext. production 1 EA 3000' } }),
       S({ op: 'tab', names: ['Prim. Costs', 'Primary Costs'], label: 'Primary costs tab' }),
       S({ op: 'grid', label: 'Primary cost 0135', columns: { act: ['Activity'], desc: ['Description'], amount: ['Amount'], ce: ['Cost Elem', 'Cost Element'] }, fallback: { act: 1, desc: 2, amount: 3, ce: 5 }, rows: [{ act: d.primCost.act, desc: d.primCost.desc, amount: d.primCost.amount, ce: d.primCost.costElem }] }),
       S({ op: 'key', key: 'Enter', label: 'Confirm primary cost' }),
@@ -122,16 +127,11 @@ export const TASKS = [
   {
     id: 4, title: 'Create 22 relationships', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: false,
     steps: (d) => [
-      S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
-      ...['0010', '0020', '0030', '0040', '0045', '0050', '0060', '0070', '0080', '0090', '0100', '0110', '0120', '0130', '0135'].flatMap((from) => {
-        const succ = d.relationships.filter((r) => r.from === from).map((r) => r.to)
-        return [
-          S({ op: 'overview', node: from, button: ['Relationship Overview'], label: `Relationships of ${from}` }),
-          S({ op: 'grid', label: `${from} successors ${succ.join(', ')}`, columns: { act: ['Activity'], scs: ['Scs', 'Successor'] }, append: true, rows: succ.map((to) => ({ act: to, scs: true })) }),
-          S({ op: 'key', key: 'Enter', label: 'Confirm relationships' })
-        ]
-      }),
-      S({ op: 'save', label: 'Save relationships', expect: 'saved|changed' })
+      ...[['0020', '0030', '0040', '0045', '0050', '0060', '0070'], ['0080', '0090', '0100', '0110', '0120', '0130', '0135', '0140']].flatMap((batch, bi) => [
+        S({ op: 'openProject', project: d.project, label: `Open ${d.project} (batch ${bi + 1})` }),
+        ...batch.map((act) => S({ op: 'recipe', name: 'relationsPred', args: { act, preds: PREDECESSORS[act] }, label: `${act} predecessors ${PREDECESSORS[act].join(', ')}` })),
+        S({ op: 'save', label: `Save relationships batch ${bi + 1}`, expect: 'saved|being changed|changed' })
+      ])
     ]
   },
   {
@@ -146,17 +146,13 @@ export const TASKS = [
     id: 6, title: 'PS text and milestones', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: false,
     steps: (d) => [
       S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
-      S({ op: 'overview', node: d.project, button: ['PS Text Overview'], label: 'PS Text Overview' }),
-      S({ op: 'grid', label: `PS text ${d.psText}`, columns: { st: ['ST', 'Text type'], desc: ['Description'], lang: ['TT', 'Language'] }, rows: [{ st: '01', desc: d.psText, lang: 'DE' }] }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm PS text' }),
-      S({ op: 'manual', label: 'Write PS text body', instruction: 'Type any text into the editor and press Back to return to the Project Builder.', optional: true }),
+      S({ op: 'recipe', name: 'psText', args: { wbs: d.project, st: '01', desc: d.psText, lang: 'DE', body: `Functional specification ultralight racing bike ${d.suffix}` }, label: `PS text ${d.psText}, type 01, language DE` }),
+      S({ op: 'save', label: 'Save PS text', expect: 'saved|being changed|changed' }),
       ...d.milestones.flatMap((m) => [
-        S({ op: 'overview', node: m.act, button: ['Milestone Overview'], label: `Milestone overview on ${m.act}` }),
-        S({ op: 'grid', label: `Milestone ${m.usage}`, columns: { usage: ['Usage'], desc: ['Description'] }, rows: [{ usage: m.usage, desc: m.desc }] }),
-        S({ op: 'key', key: 'Enter', label: 'Confirm milestone' }),
-        S({ op: 'manual', label: `Milestone ${m.usage} flags`, instruction: `Open the milestone below activity ${m.act} in the tree, tick Trend analysis, Progress analysis and Offset to fin., press Enter.`, values: { Usage: m.usage, Description: m.desc } })
-      ]),
-      S({ op: 'save', label: 'Save', expect: 'saved|changed' })
+        S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
+        S({ op: 'recipe', name: 'milestone', args: { act: m.act, usage: m.usage, desc: m.desc, flags: FLAG_PATTERNS }, label: `Milestone ${m.usage} ${m.desc} on ${m.act} with trend, progress, offset flags`, values: { Usage: m.usage, Description: m.desc } }),
+        S({ op: 'save', label: `Save milestone ${m.usage}`, expect: 'saved|being changed|changed' })
+      ])
     ]
   },
   {
@@ -165,7 +161,9 @@ export const TASKS = [
       S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
       S({ op: 'menu', path: ['Edit', 'Status', 'Release'], label: 'Edit > Status > Release' }),
       S({ op: 'expect', statusbar: 'status|set|released', label: 'Status message' }),
-      S({ op: 'save', label: 'Save', expect: 'saved|changed' })
+      S({ op: 'save', label: 'Save', expect: 'saved|being changed|changed' }),
+      S({ op: 'openProject', project: d.project, label: 'Reopen to verify status' }),
+      S({ op: 'expectField', titles: ['System Status'], contains: 'REL', label: 'System status contains REL' })
     ]
   },
   {
@@ -173,8 +171,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Project costs Act/Comm/Total/Plan' }),
       S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile GL01000' }),
-      S({ op: 'fill', fields: [[['Controlling Area'], d.controllingArea], [['Project'], d.project], [['Plan Version'], '0'], [['From fiscal year'], '{YEAR}'], [['To fiscal year'], '{YEAR+1}'], [['From period'], '1'], [['To period'], '12']], label: 'Selection' }),
-      S({ op: 'key', key: 'F8', label: 'Execute' }),
+      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea }, label: 'Selection and execute' }),
       S({ op: 'shot', name: 't8-costs-planned', caption: 'Task 8: Planned costs after release' })
     ]
   },
@@ -192,24 +189,17 @@ export const TASKS = [
     id: 10, title: 'Primary cost 8,000 EUR flexible', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: false,
     steps: (d) => [
       S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
-      S({ op: 'node', text: ['Performance test', d.primCost.act], label: 'Select activity 0135' }),
-      S({ op: 'fill', fields: [[['Amount'], '8000']], label: 'Amount 8000' }),
-      S({ op: 'check', titles: ['Flexible'], label: 'Tick Flexible' }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm' }),
-      S({ op: 'save', label: 'Save', expect: 'saved|changed' })
+      S({ op: 'recipe', name: 'activityFields', args: { act: d.primCost.act, fields: [[['Costs in the activity', 'Amount'], '8000']], checks: ['flexible duration'] }, label: 'Activity 0135: costs 8000, flexible duration' }),
+      S({ op: 'save', label: 'Save', expect: 'saved|being changed|changed' })
     ]
   },
   {
     id: 11, title: 'Confirm 35 h on 0010', role: 'AR Accountant', area: 'PS', txn: 'CN25', shot: true,
     steps: (d) => [
       S({ op: 'txn', code: 'CN25', label: 'Confirm network activity' }),
-      S({ op: 'manual', label: 'Select activity', instruction: `Enter the network of ${d.project} (search by project) and activity ${d.confirmation.act}, press Enter.`, values: { Project: d.project, Activity: d.confirmation.act } }),
-      S({ op: 'fill', fields: [[['Actual work', 'Actual Work'], d.confirmation.actual]], label: 'Actual work 35' }),
-      S({ op: 'clear', titles: ['Actual start', 'Actual finish', 'Act. start', 'Act. finish'], optional: true, label: 'Clear actual dates' }),
-      S({ op: 'key', key: 'Enter', label: 'Determine remaining work' }),
-      S({ op: 'expectField', titles: ['Remaining work', 'Remaining Work'], value: '45', label: 'Remaining 45 h' }),
+      S({ op: 'recipe', name: 'confirmActivity', args: { act: d.confirmation.act, actual: d.confirmation.actual, remaining: d.confirmation.remaining }, label: 'Actual work 35 h, partial confirmation, dates cleared, remaining 45 h' }),
       S({ op: 'shot', name: 't11-confirmation', caption: 'Task 11: Actual work 35 of 80 hours, remaining 45 hours' }),
-      S({ op: 'save', label: 'Save confirmation', expect: 'confirm|saved' })
+      S({ op: 'recipe', name: 'confirmSave', label: 'Save confirmation' })
     ]
   },
   {
@@ -217,9 +207,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
       S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
-      S({ op: 'fill', fields: [[['Controlling Area'], d.controllingArea], [['Project'], d.project], [['Plan Version'], '0'], [['From fiscal year'], '{YEAR}'], [['To fiscal year'], '{YEAR+1}'], [['From period'], '1'], [['To period'], '12']], label: 'Selection' }),
-      S({ op: 'key', key: 'F8', label: 'Execute' }),
-      S({ op: 'expectText', text: '1,750.00', label: 'Actual 1,750.00 EUR' }),
+      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expect: '1,750.00' }, label: 'Execute, expect actual 1,750.00 EUR' }),
       S({ op: 'shot', name: 't12-costs-after-confirmation', caption: 'Task 12: Actual costs 1,750.00 EUR after confirmation' })
     ]
   },
@@ -240,9 +228,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
       S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
-      S({ op: 'fill', fields: [[['Controlling Area'], d.controllingArea], [['Project'], d.project], [['Plan Version'], '0'], [['From fiscal year'], '{YEAR}'], [['To fiscal year'], '{YEAR+1}'], [['From period'], '1'], [['To period'], '12']], label: 'Selection' }),
-      S({ op: 'key', key: 'F8', label: 'Execute' }),
-      S({ op: 'expectText', text: '9,700.00', label: 'Invoice 9,700.00 EUR visible' }),
+      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expect: '11,450.00' }, label: 'Execute, expect actual 11,450.00 EUR (1,750 + 9,700)' }),
       S({ op: 'shot', name: 't14-costs-final', caption: 'Task 14: Actual costs after supplier invoice' })
     ]
   }

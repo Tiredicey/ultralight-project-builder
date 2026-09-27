@@ -1,9 +1,13 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist } from './sap.mjs'
+import { RECIPES, saveProject } from './recipes.mjs'
 
-const VERSION = '1.0.0'
+const toRe = (v) => (v instanceof RegExp ? v : new RegExp(String(v), 'i'))
+const reviveArgs = (a = {}) => ({ ...a, flags: a.flags ? a.flags.map(toRe) : a.flags, checks: a.checks ? a.checks.map(toRe) : a.checks })
+
+const VERSION = '1.1.0'
 if (existsSync(new URL('../.env', import.meta.url))) {
   for (const line of readFileSync(new URL('../.env', import.meta.url), 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/)
@@ -40,6 +44,7 @@ class Job {
     this.stepOnce = false; this.aborted = false; this.seq = 0; this.lastHash = ''; this.lastFrameAt = 0; this.activeAt = Date.now(); this.target = null
     this.ctx = { host: SAP_HOST, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '' }
     this.results = { ok: 0, failed: 0, manual: 0, skipped: 0 }
+    this.rctx = { page: null, vars: {}, dirty: false }
   }
 
   ev(level, message, stepKey, data) { this.events.push({ level, message, stepKey, data }); log(level.toUpperCase(), stepKey || '', message) }
@@ -48,6 +53,7 @@ class Job {
     this.context = await this.browser.newContext({ viewport: VIEW, deviceScaleFactor: 1, locale: 'en-US', ignoreHTTPSErrors: false })
     this.page = await this.context.newPage()
     this.page.on('dialog', (d) => d.accept().catch(() => {}))
+    this.rctx.page = this.page
     this.alive = true
     this.syncLoop = this.loopSync()
     this.frameLoop = this.loopFrames()
@@ -172,7 +178,7 @@ class Job {
     this.ev('ok', `Evidence captured: ${caption}`, null)
   }
 
-  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss'].includes(s.op) }
+  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss'].includes(s.op) && !(s.op === 'recipe' && ['treeSelect', 'costReport'].includes(s.name)) }
 
   async verify(note, extra = {}) {
     const sb = await statusbar(this.page)
@@ -196,39 +202,45 @@ class Job {
     if (s.op === 'key') { await p.keyboard.press(s.key); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.key} pressed`) }
     if (s.op === 'tab') { const t = await clickTab(p, s.names); if (!t) return s.optional ? { ok: true, note: 'Tab not present, continuing' } : { ok: false, reason: `Tab ${s.names.join(' / ')} not found` }; return { ok: true, note: `Tab ${t.t}` } }
     if (s.op === 'shot') { await settle(p, 500); await this.evidence(s.name, s.caption, s.task); return { ok: true, note: `Screenshot ${s.name}` } }
-    if (s.op === 'save') {
-      await p.keyboard.press('Control+S'); await settle(p, 2000)
-      for (let i = 0; i < 3; i++) { const h = await handlePopups(p, [/^Yes$/i, /^Ja$/i, /^Save$/i, /^Continue$/i, /^OK$/i]); if (!h) break; await settle(p, 1200) }
-      const sb = await statusbar(p)
-      if (new RegExp(s.expect || 'saved', 'i').test(sb)) return { ok: true, note: `Saved: ${sb}`, statusbar: sb }
-      if (/no changes|keine Änderungen|data not changed|Daten wurden nicht/i.test(sb)) return { ok: false, reason: `SAP says nothing changed: ${sb}. The entries were not committed.` }
-      return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
+    if (s.op === 'save') return saveProject(this.rctx, s)
+    if (s.op === 'recipe') {
+      const fn = RECIPES[s.name]
+      if (!fn) return { ok: false, reason: `Unknown recipe ${s.name}` }
+      const r = await fn(this.rctx, reviveArgs(s.args))
+      return r.ok ? { ...r, statusbar: r.statusbar || await statusbar(p) } : r
     }
     if (s.op === 'openProject') {
       const r = await gotoTxn(p, this.ctx, 'CJ20N'); if (!r.ok) return r
       await handlePopups(p, [/^Continue$/i, /^Cancel$/i])
-      let hit = await selectNode(p, [s.project], true)
+      let hit = (await openProjectFromWorklist(p, s.project)) ? s.project : null
       if (!hit) {
         const open = await clickButton(p, [/^Open$/i, /Open project/i, /Öffnen/i])
         if (open) { const f = await findByLabel(p, [/Project def/i, /Project Definition/i]); if (f) { await typeInto(p, f, s.project); await p.keyboard.press('Enter'); await settle(p, 2500); hit = s.project } }
       }
       if (!hit) return { ok: false, reason: `Could not open ${s.project} from the worklist or Open dialog` }
+      await settle(p, 2500)
       const title = await p.title()
-      const body = await p.evaluate(() => document.body.innerText.slice(0, 3000))
-      return body.includes(s.project) ? { ok: true, note: `${s.project} open`, readback: title } : { ok: false, reason: `${s.project} not visible after open` }
+      if (!title.includes(s.project)) return { ok: false, reason: `${s.project} not open, title is "${title}"` }
+      await expandProjectTree(p)
+      const net = (await treeRows(p)).map((r) => r.ident.match(/^(\d{5,})$/)).find(Boolean)
+      if (net) this.rctx.vars.network = net[1]
+      this.rctx.dirty = false
+      return { ok: true, note: `${s.project} open${net ? `, network ${net[1]}` : ''}`, readback: title }
     }
     if (s.op === 'node') { const t = await selectNode(p, s.text); return t ? { ok: true, note: `Selected ${t}` } : { ok: false, reason: `Tree node ${s.text.join(' / ')} not found` } }
     if (s.op === 'overview') {
-      const t = await selectNode(p, [s.node])
-      if (!t) return { ok: false, reason: `Tree node ${s.node} not found` }
-      const b = await clickButton(p, s.button)
+      const sel = /^\d{4}$/.test(s.node) ? { act: s.node } : { ident: s.node, level: s.level ?? 1 }
+      const t = await selectTreeObject(p, sel)
+      if (!t.ok) return t
+      if (t.network) this.rctx.vars.network = t.network
+      const b = await clickTitle(p, s.button) || await clickButton(p, s.button)
       if (!b) return { ok: false, reason: `Button ${s.button.join(' / ')} not found` }
-      return { ok: true, note: `${b.t} on ${s.node}` }
+      return { ok: true, note: `${b.t} on ${t.header.join(' / ')}` }
     }
     if (s.op === 'menu') { const r = await clickMenu(p, s.path); if (!r.ok) return r; await handlePopups(p); return this.verify(`Menu ${s.path.join(' > ')}`) }
     if (s.op === 'expect') { const sb = await statusbar(p); return new RegExp(s.statusbar, 'i').test(sb) ? { ok: true, note: `Status bar: ${sb}`, statusbar: sb } : { ok: false, reason: `Expected status /${s.statusbar}/, got "${sb}"` } }
     if (s.op === 'expectText') { await settle(p, 800); const found = await p.evaluate((t) => document.body.innerText.includes(t), s.text); return found ? { ok: true, note: `Found ${s.text}`, readback: s.text } : { ok: false, reason: `Value ${s.text} not on screen. Verify the report manually.` } }
-    if (s.op === 'expectField') { const f = await findByLabel(p, s.titles); if (!f) return { ok: false, reason: `Field ${s.titles[0]} not found` }; const v = (f.v || '').replace(/[^\d.,]/g, ''); return parseFloat(v.replace(',', '.')) === Number(s.value) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected ${s.value}` } }
+    if (s.op === 'expectField') { const f = await findByLabel(p, s.titles); if (!f) return { ok: false, reason: `Field ${s.titles[0]} not found` }; if (s.contains) return String(f.v).includes(s.contains) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected to contain ${s.contains}` }; const v = (f.v || '').replace(/[^\d.,]/g, ''); return parseFloat(v.replace(/,/g, '')) === Number(s.value) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected ${s.value}` } }
     if (s.op === 'popupField') {
       const txt = await popupText(p)
       if (!txt) return s.optional ? { ok: true, note: 'No popup, value not required' } : { ok: false, reason: 'Popup not shown' }
@@ -258,7 +270,7 @@ class Job {
       if (hit.v !== 'true') { await p.mouse.click(hit.x + 6, hit.y + hit.h / 2); await settle(p, 300) }
       return { ok: true, note: `${s.titles[0]} ticked` }
     }
-    if (s.op === 'grid') return this.gridOp(s)
+    if (s.op === 'grid') { const r = await this.gridOp(s); if (r.ok) this.rctx.dirty = true; return r }
     return { ok: false, reason: `Unknown op ${s.op}` }
   }
 
