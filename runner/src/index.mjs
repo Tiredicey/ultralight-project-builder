@@ -18,6 +18,8 @@ const SAP_HOST = process.env.SAP_HOST || 'm53p.ucc.cloud'
 const SAP_CLIENT = process.env.SAP_CLIENT || '236'
 const HEADLESS = process.env.HEADLESS !== 'false'
 const LOCAL = localAccounts()
+const MAX_JOBS = Math.max(1, Math.min(4, Number(process.env.MAX_JOBS) || 1))
+const ONLY = (process.env.ONLY_ACCOUNTS || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
 if (!CONTROL || !TOKEN) { process.stderr.write('Set CONTROL_URL and RUNNER_TOKEN in runner/.env\n'); process.exit(1) }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -360,23 +362,33 @@ const STARTED = Date.now()
 
 async function main() {
   log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'}`)
-  const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage'] })
+  const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage', '--disable-gpu', ...(totalmem() < 1.6e9 ? ['--js-flags=--max-old-space-size=384', '--renderer-process-limit=1'] : [])] })
   // Self-report for the Readiness page: host, versions, local accounts (names only) and SAP reachability.
   const hello = async () => {
     let sap = null
     try { const t = Date.now(); const r = await fetch(webgui(SAP_HOST, SAP_CLIENT), { redirect: 'manual', signal: AbortSignal.timeout(15000) }); sap = { ok: r.status < 500, status: r.status, ms: Date.now() - t } } catch (e) { sap = { ok: false, error: e.message } }
-    const info = { version: VERSION, host: hostname(), platform: `${process.platform}/${process.arch}`, node: process.version, cpus: cpus().length, memMb: Math.round(totalmem() / 1048576), chromium: browser.version(), headless: HEADLESS, accounts: Object.keys(LOCAL), accountsWithPassword: Object.entries(LOCAL).filter(([, p]) => p).map(([u]) => u), sapHost: SAP_HOST, sapClient: SAP_CLIENT, sap, startedAt: STARTED }
+    const info = { version: VERSION, host: hostname(), platform: `${process.platform}/${process.arch}`, node: process.version, cpus: cpus().length, memMb: Math.round(totalmem() / 1048576), chromium: browser.version(), headless: HEADLESS, accounts: Object.keys(LOCAL), accountsWithPassword: Object.entries(LOCAL).filter(([, p]) => p).map(([u]) => u), sapHost: SAP_HOST, sapClient: SAP_CLIENT, sap, startedAt: STARTED, maxJobs: MAX_JOBS, only: ONLY }
     const r = await call('/hello', { info }).catch((e) => { log('WARN hello', e.message); return null })
     if (r?.latest && r.latest !== VERSION && !hello.warned) { hello.warned = true; log(`NOTE site expects runner ${r.latest}, this is ${VERSION}. git pull && npm install`) }
   }
   await hello()
   setInterval(hello, 10 * 60 * 1000)
   let idle = 0
+  const active = new Map()
   for (;;) {
     try {
-      const r = await call('/claim', { accounts: Object.keys(LOCAL) })
-      if (r.job) { idle = 0; log(`Job #${r.job.id} ${r.job.sapUser} tasks ${r.job.tasks.join(',')} (${r.plan.steps.length} steps)`); await new Job(r.job, r.plan, browser).start(); continue }
-      if (++idle % 60 === 1) log('Waiting for jobs')
+      if (active.size < MAX_JOBS) {
+        const r = await call('/claim', { accounts: Object.keys(LOCAL), only: ONLY, busy: [...active.keys()] })
+        if (r.job) {
+          idle = 0
+          log(`Job #${r.job.id} ${r.job.sapUser} tasks ${r.job.tasks.join(',')} (${r.plan.steps.length} steps), slot ${active.size + 1}/${MAX_JOBS}`)
+          const run = new Job(r.job, r.plan, browser).start().catch((e) => log('ERROR job', r.job.id, e.message)).finally(() => active.delete(r.job.sapUser))
+          active.set(r.job.sapUser, run)
+          if (MAX_JOBS === 1) await run
+          continue
+        }
+        if (++idle % 60 === 1) log(`Waiting for jobs${ONLY.length ? ` (only ${ONLY.join(', ')})` : ''}`)
+      }
     } catch (e) { log('WARN', e.message) }
     await sleep(3000)
   }

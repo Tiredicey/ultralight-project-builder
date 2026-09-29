@@ -13,7 +13,7 @@ const SESSION_DAYS = 14
 const FRAME_MAX = 1_800_000
 const EVIDENCE_MAX = 1_900_000
 const ACTIVE = ['queued', 'claimed', 'running', 'paused', 'waiting']
-export const RUNNER_LATEST = '1.2.0'
+export const RUNNER_LATEST = '1.3.0'
 const DOC_CHUNK = 900_000
 const DOC_MAX = 20 * 1024 * 1024
 
@@ -92,6 +92,17 @@ const jobFor = async (c: Context<Env>, id: number) => {
 const jobView = (job: any) => {
   const { secret, ...rest } = job
   return { ...rest, tasks: j(job.tasks, []), prompt: j(job.prompt, null), result: j(job.result, null), hasSecret: !!secret }
+}
+
+
+const recoverStale = async (c: Context<Env>) => {
+  const t = now()
+  await c.env.DB.prepare("UPDATE jobs SET status = 'queued', runner_id = NULL WHERE status = 'claimed' AND started_at < ?").bind(t - 120000).run()
+  const dead = (await c.env.DB.prepare("SELECT j.id FROM jobs j LEFT JOIN runners r ON r.id = j.runner_id WHERE j.status IN ('running', 'paused', 'waiting') AND (r.id IS NULL OR r.revoked = 1 OR r.last_seen < ?)").bind(t - 180000).all<{ id: number }>()).results
+  for (const d of dead) {
+    await c.env.DB.prepare("UPDATE jobs SET status = 'failed', finished_at = ?, secret = NULL, result = ? WHERE id = ?").bind(t, JSON.stringify({ summary: 'Runner stopped reporting for 3 minutes; job released so the SAP account is free again' }), d.id).run()
+    await event(c, d.id, 'error', 'Runner went silent for 3 minutes. Job marked failed and the SAP account released.')
+  }
 }
 
 export const api = new Hono<Env>()
@@ -236,6 +247,7 @@ api.post('/jobs', async (c) => {
     const g = await c.env.DB.prepare('SELECT 1 FROM grants WHERE user_id = ? AND account_id = ?').bind(u.id, acc.id).first()
     if (!g) return c.json({ error: 'The owner has not granted you this SAP account' }, 403)
   }
+  await recoverStale(c)
   const busy = await c.env.DB.prepare(`SELECT id FROM jobs WHERE sap_user = ? AND status IN (${ACTIVE.map(() => '?').join(',')})`).bind(sapUser, ...ACTIVE).first<{ id: number }>()
   if (busy) return c.json({ error: `Job #${busy.id} is already active on ${sapUser}. SAP allows one dialog session per run.`, jobId: busy.id }, 409)
   const tasks = (Array.isArray(b.tasks) ? b.tasks : []).map(Number).filter((n: number) => n >= 1 && n <= 14)
@@ -422,10 +434,11 @@ api.post('/runner/claim', async (c) => {
   const b = await c.req.json().catch(() => ({}))
   const local = (Array.isArray(b.accounts) ? b.accounts : []).map((s: string) => String(s).toUpperCase())
   const allowed = j<string[]>(r.accounts, [])
-  const stale = now() - 120000
-  await c.env.DB.prepare("UPDATE jobs SET status = 'queued', runner_id = NULL WHERE status = 'claimed' AND started_at < ?").bind(stale).run()
-  const { results } = await c.env.DB.prepare("SELECT * FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 20").all<any>()
-  const job = results.find((x) => (allowed.length === 0 || allowed.includes(x.sap_user)) && (local.includes(x.sap_user) || !!x.secret))
+  const only = (Array.isArray(b.only) ? b.only : []).map((s: string) => String(s).toUpperCase())
+  const busy = (Array.isArray(b.busy) ? b.busy : []).map((s: string) => String(s).toUpperCase())
+  await recoverStale(c)
+  const { results } = await c.env.DB.prepare("SELECT * FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 50").all<any>()
+  const job = results.find((x) => (allowed.length === 0 || allowed.includes(x.sap_user)) && (only.length === 0 || only.includes(x.sap_user)) && !busy.includes(x.sap_user) && (local.includes(x.sap_user) || !!x.secret))
   if (!job) return c.json({ job: null })
   const upd = await c.env.DB.prepare("UPDATE jobs SET status = 'claimed', runner_id = ?, started_at = ? WHERE id = ? AND status = 'queued'").bind(r.id, now(), job.id).run()
   if (!upd.meta.changes) return c.json({ job: null })
