@@ -1,7 +1,9 @@
 const plan = pack.planFor(ctx.user, TASKS)
 const out = []
 const revive = (a = {}) => ({ ...a, flags: a.flags?.map((f) => new RegExp(f, 'i')), checks: a.checks?.map((f) => new RegExp(f, 'i')) })
+let skip = null
 for (const s of plan.steps) {
+  if (skip === s.task && s.op !== 'shot') { out.push(`${s.key} skipped (already done)`); continue }
   let r
   try {
     if (s.op === 'openProject') {
@@ -24,6 +26,7 @@ for (const s of plan.steps) {
     else if (s.op === 'shot') r = { ok: true, note: 'shot' }
     else r = { ok: false, reason: `op ${s.op} not simulated` }
   } catch (e) { r = { ok: false, reason: e.message } }
+  if (r.skipTask) skip = s.task
   out.push(`${s.key} ${s.op}${s.name ? ':' + s.name : ''} ${r.ok ? 'OK' : 'FAIL'} ${(r.note || r.reason || '').slice(0, 200)}`)
   if (!r.ok) { out.push(`  sb=${await sap.statusbar(page)} pop=${(await sap.popupText(page)).slice(0, 160)} title=${await page.title()}`); break }
 }

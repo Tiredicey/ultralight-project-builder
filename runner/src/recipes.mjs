@@ -451,6 +451,16 @@ export async function primaryCost(ctx, s) {
   return { ok: true, note: `${s.act} ${got[1]} ${got[2]} EUR on ${got[3]}` }
 }
 
+export async function guardPosted(ctx, s) {
+  const p = ctx.page
+  await p.goto(`https://${ctx.sap.host}/sap/bc/gui/sap/its/webgui?sap-client=${ctx.sap.client}&sap-language=EN&~transaction=S_ALR_87013542`, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await settle(p, 1500)
+  const r = await costReport(ctx, { project: s.project, coArea: s.coArea })
+  const v = ctx.vars.report?.[s.costElement]?.actual || 0
+  if (v + 0.005 >= Number(s.atLeast)) return { ok: true, skipTask: true, note: `${s.costElement} actual already ${v.toFixed(2)} (>= ${s.atLeast}); ${s.what} was posted before, skipping to avoid a duplicate` }
+  return { ok: true, note: `${s.costElement} actual ${v.toFixed(2)}, ${s.what} still to post${r.ok ? '' : ` (${r.reason})`}` }
+}
+
 export async function saveProject(ctx, s) {
   const p = ctx.page
   if (!ctx.dirty && ctx.vars.existing) return { ok: true, note: `Nothing entered for ${ctx.vars.existing}, save skipped` }
@@ -464,4 +474,4 @@ export async function saveProject(ctx, s) {
   return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
 }
 
-export const RECIPES = { activities, primaryCost, wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
+export const RECIPES = { guardPosted, activities, primaryCost, wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
