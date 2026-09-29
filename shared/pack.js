@@ -206,7 +206,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
       S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
-      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expect: '1,750.00' }, label: 'Execute, expect actual 1,750.00 EUR' }),
+      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expectActual: 1750 }, label: 'Execute, expect actual 1,750.00 EUR' }),
       S({ op: 'shot', name: 't12-costs-after-confirmation', caption: 'Task 12: Actual costs 1,750.00 EUR after confirmation' })
     ]
   },
@@ -227,7 +227,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
       S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
-      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expect: '11,450.00' }, label: 'Execute, expect actual 11,450.00 EUR (1,750 + 9,700)' }),
+      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expectActual: 11450 }, label: 'Execute, expect actual 11,450.00 EUR (1,750 + 9,700)' }),
       S({ op: 'shot', name: 't14-costs-final', caption: 'Task 14: Actual costs after supplier invoice' })
     ]
   }

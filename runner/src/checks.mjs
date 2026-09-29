@@ -75,12 +75,14 @@ export class Checker {
   async report() {
     const { page, d } = this
     await gotoTxn(page, this.ctx, 'S_ALR_87013542')
-    const r = await costReport({ page, vars: {} }, { project: d.project, coArea: d.controllingArea })
-    this.rec('reportRuns', 'S_ALR_87013542 runs for the project', r.ok, r.note || r.reason)
-    const txt = await page.evaluate(() => document.body?.innerText || '')
-    this.rec('labor', 'actual 8000000 Labor 1,750.00', txt.includes('1,750.00'), txt.includes('1,750.00') ? 'found' : 'not on report')
-    this.rec('plan8000', 'plan 6300000 = 8,000.00', /6300000[\s\S]{0,80}8,000\.00/.test(txt), '6300000 Other operating expenses')
-    this.rec('invoice', 'actual 6300000 = 9,700.00', txt.includes('9,700.00'), txt.includes('9,700.00') ? 'posted' : 'not posted')
-    this.rec('finalActual', 'all cost elements actual 11,450.00', txt.includes('11,450.00'), (r.readback || '').split(' / ')[0] || 'not parsed')
+    const vars = {}
+    const r = await costReport({ page, vars }, { project: d.project, coArea: d.controllingArea })
+    const m = vars.report || {}
+    const f = (n) => (n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    this.rec('reportRuns', 'S_ALR_87013542 runs for the project', r.ok && (m.total?.plan || 0) > 0, r.note || r.reason)
+    this.rec('labor', 'actual 8000000 Labor 1,750.00', m['8000000']?.actual === 1750, `8000000 actual ${f(m['8000000']?.actual)}`)
+    this.rec('plan8000', 'plan 6300000 = 8,000.00', m['6300000']?.plan === 8000, `6300000 plan ${f(m['6300000']?.plan)}`)
+    this.rec('invoice', 'actual 6300000 = 9,700.00', m['6300000']?.actual === 9700, `6300000 actual ${f(m['6300000']?.actual)}`)
+    this.rec('finalActual', 'all cost elements actual 11,450.00', m.total?.actual === 11450, `all cost elements actual ${f(m.total?.actual)}`)
   }
 }

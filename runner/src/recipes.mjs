@@ -207,10 +207,37 @@ export async function costReport(ctx, s) {
   const fill = [[['Project definition'], 0, s.project], [['Controlling Area'], 0, s.coArea], [['Version'], 0, '0'], [['Fiscal Year'], 0, String(y)], [['Fiscal Year'], 1, String(y + 1)], [['Period Block', 'Period'], 0, '1'], [['Period Block', 'Period'], 1, '12']]
   for (const [labels, n, v] of fill) { const f = await findByLabel(p, labels, ['input'], n); if (!f) return { ok: false, reason: `Selection field ${labels[0]} #${n + 1} not found` }; await typeInto(p, f, v); await p.keyboard.press('Tab'); await sleep(200) }
   await p.keyboard.press('F8'); await settle(p, 5000)
-  const text = await p.evaluate(() => document.body.innerText)
-  const nums = ((text.match(/All Cost Elements[\s\S]{0,200}/) || [''])[0].match(/[\d,]+\.\d{2}/g)) || []
-  if (s.expect && !text.includes(s.expect)) return { ok: false, reason: `Expected ${s.expect} on the report. Totals seen: ${nums.join(' | ') || 'none'}` }
-  return { ok: true, note: `Report totals Actual/Commitment/Total/Plan: ${nums.slice(0, 4).join(' / ') || 'not parsed'}`, readback: nums.slice(0, 4).join(' / ') }
+  const m = await reportMatrix(p)
+  ctx.vars.report = m
+  const t = m?.total
+  if (!t) { const sb = await statusbar(p); return { ok: false, reason: `Cost report not shown: ${sb || 'no totals line'}` } }
+  const fmt = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const line = `Actual ${fmt(t.actual)} / Commitment ${fmt(t.commitment)} / Total ${fmt(t.total)} / Plan ${fmt(t.plan)}`
+  if (s.expectActual != null && Math.abs(t.actual - Number(s.expectActual)) > 0.005) return { ok: false, reason: `Expected actual ${fmt(Number(s.expectActual))}, report shows ${line}` }
+  return { ok: true, note: `Report totals ${line}`, readback: line, report: m }
+}
+
+export async function reportMatrix(page) {
+  return page.evaluate(() => {
+    const leaf = [...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().width > 0)
+    const box = (e) => { const r = e.getBoundingClientRect(); return { x: r.left, r: r.right, y: Math.round(r.top), t: e.textContent.trim() } }
+    const cols = ['Actual', 'Commitments', 'Total', 'Plan'].map((n) => leaf.map(box).find((b) => b.t === n)).filter(Boolean)
+    if (cols.length < 4) return null
+    const nums = leaf.map(box).filter((b) => /^[\d,]+\.\d\d-?$/.test(b.t))
+    const labels = leaf.map(box).filter((b) => /^(\d{7}\s+.+|\*\s*All Cost Elements|All Cost Elements)$/.test(b.t) || /^\d{7}$/.test(b.t))
+    const val = (t) => { const n = parseFloat(t.replace(/,/g, '').replace(/-$/, '')); return t.endsWith('-') ? -n : n }
+    const rows = {}
+    for (const l of labels) {
+      const key = /All Cost Elements/.test(l.t) ? 'total' : l.t.match(/^\d{7}/)[0]
+      const out = { actual: 0, commitment: 0, total: 0, plan: 0 }
+      for (const n of nums.filter((n) => Math.abs(n.y - l.y) < 4)) {
+        const c = cols.find((c) => n.r > c.x && n.x < c.r)
+        if (c) out[{ Actual: 'actual', Commitments: 'commitment', Total: 'total', Plan: 'plan' }[c.t]] = val(n.t)
+      }
+      rows[key] = out
+    }
+    return rows
+  })
 }
 
 export async function extService(ctx, s) {
