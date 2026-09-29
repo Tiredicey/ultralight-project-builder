@@ -84,14 +84,8 @@ export const TASKS = [
     id: 1, title: 'Create project and WBS', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: true,
     steps: (d) => [
       S({ op: 'txn', code: 'CJ20N', label: 'Open Project Builder' }),
-      S({ op: 'dismiss', label: 'Close optional start-up popups', buttons: ['Continue', 'Cancel'] }),
-      S({ op: 'manual', label: 'User-specific options', instruction: 'If "Project Builder: Options" appears choose the options button, set Hierarchy levels 99, tick Preview last project and confirm.', optional: true }),
-      S({ op: 'manual', label: 'Create project definition', instruction: `Create > Project. Project def. ${d.project}, Text "${d.projectText}", Project Profile ${d.profile} Cost projects (Europe), press Enter, then open the WBS Element Overview.`, values: { 'Project def.': d.project, Text: d.projectText, 'Project Profile': d.profile } }),
-      S({ op: 'grid', label: 'Fill WBS elements', columns: { level: ['Lev', 'Level'], wbs: ['WBS Element', 'WBS element'], desc: ['Description'], pe: ['PE', 'Planning Element'], acct: ['Acct', 'Account Assignment'] }, rows: d.wbs.map((w) => ({ level: w.level, wbs: w.wbs, desc: w.desc, pe: w.pe, acct: w.acct })) }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm WBS rows' }),
-      S({ op: 'tab', names: ['Responsibilities'], label: 'Open Responsibilities tab' }),
-      S({ op: 'grid', label: 'Responsible cost centres', columns: { cc: ['Resp. cost cntr', 'Resp.cost cntr', 'Responsible Cost Center'] }, match: { key: 'wbs', columns: ['WBS Element', 'WBS element'] }, rows: d.wbs.map((w) => ({ wbs: w.wbs, cc: w.costCenter })) }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm cost centres (EU00 is derived)' }),
+      S({ op: 'recipe', name: 'createProject', args: { project: d.project, text: d.projectText, profile: d.profile }, label: `Create ${d.project} "${d.projectText}" with profile ${d.profile}`, values: { 'Project def.': d.project, Text: d.projectText, 'Project Profile': d.profile } }),
+      S({ op: 'recipe', name: 'wbsElements', args: { rows: d.wbs }, label: `WBS ${d.project} to ${d.project}-5 with PE, Acct and responsible cost centres`, values: Object.fromEntries(d.wbs.map((w) => [w.wbs, `${w.desc} · ${w.costCenter}`])) }),
       S({ op: 'shot', name: 't1-wbs-responsibilities', caption: `Task 1: WBS elements ${d.project} to ${d.project}-5 with controlling area ${d.controllingArea}` }),
       S({ op: 'save', label: 'Save project', expect: 'saved|created|changed' })
     ]

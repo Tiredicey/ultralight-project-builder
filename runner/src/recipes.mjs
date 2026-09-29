@@ -1,4 +1,4 @@
-import { settle, captureDom, statusbar, popupText, findByLabel, typeInto, clickTitle, selectTreeObject, treeRows, expandProjectTree, grids, cellState, dialogButton, dialogPickRow, handlePopups, clickTab } from './sap.mjs'
+import { openProjectFromWorklist, settle, captureDom, statusbar, popupText, findByLabel, typeInto, clickTitle, selectTreeObject, treeRows, expandProjectTree, grids, cellState, dialogButton, dialogPickRow, handlePopups, clickTab } from './sap.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const norm = (v) => String(v ?? '').trim()
@@ -316,6 +316,86 @@ export async function supplierInvoice(ctx, s) {
   return { ok: true, note: `Invoice ready: supplier ${s.supplier}, ${s.amount} EUR, G/L ${line[0]}, network ${net} activity ${s.act}, balance ${bal}`, readback: line.join(' / ') }
 }
 
+export async function createProject(ctx, s) {
+  const p = ctx.page
+  for (let k = 0; k < 3 && (await popupText(p)); k++) { const t = await popupText(p); if (/Hierarchy levels|User-specific/i.test(t)) { const f = await findByLabel(p, [/Hierarchy levels/i]); if (f) await typeInto(p, f, '99') } await handlePopups(p, [/^Continue$/i, /^OK$/i, /Confirm/i, /^Cancel$/i]) }
+  const exists = await openProjectFromWorklistQuick(p, s.project)
+  if (exists) { ctx.vars.existing = s.project; return { ok: true, note: `${s.project} already exists in SAP, creation skipped`, existed: true } }
+  ctx.vars.existing = null
+  const cr = await p.evaluate(() => { const e = [...document.querySelectorAll('[id^="CREA_TB"]')].find((x) => x.getBoundingClientRect().width > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (!cr) return { ok: false, reason: 'Create button not found in Project Builder' }
+  await p.mouse.click(cr.x, cr.y); await sleep(1200)
+  const mi = await p.evaluate(() => { const e = [...document.querySelectorAll('[role=menuitem]')].find((x) => x.innerText.trim() === 'Project' && x.getBoundingClientRect().width > 0 && x.getBoundingClientRect().top > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (!mi) return { ok: false, reason: 'Create > Project menu item not found' }
+  await p.mouse.click(mi.x, mi.y); await settle(p, 2500)
+  const pd = await findByLabel(p, ['Project definition']); const tx = await findByLabel(p, [/Short description/i])
+  if (!pd || !tx) return { ok: false, reason: 'Project definition fields not found' }
+  await typeInto(p, pd, s.project); await typeInto(p, tx, s.text)
+  const pf = (await captureDom(p)).els.find((e) => e.t === 'Project Profile')
+  if (!pf) return { ok: false, reason: 'Project Profile combobox not found' }
+  await p.mouse.click(pf.x + pf.w - 10, pf.y + pf.h / 2); await sleep(1200)
+  const opt = await p.evaluate((code) => { const e = [...document.querySelectorAll('div, span, td')].filter((x) => x.children.length === 0 && x.textContent.trim() === code && x.getBoundingClientRect().width > 0).pop(); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, s.profile)
+  if (!opt) return { ok: false, reason: `Profile ${s.profile} not in the list` }
+  await p.mouse.click(opt.x, opt.y); await sleep(1000)
+  const pv = (await captureDom(p)).els.find((e) => e.t === 'Project Profile')?.v || ''
+  if (!pv.startsWith(s.profile)) return { ok: false, reason: `Project Profile reads "${pv}"` }
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  const sb = await statusbar(p)
+  if (/already exists|error/i.test(sb)) return { ok: false, reason: sb }
+  if (!(await clickTitle(p, ['WBS Element Overview']))) return { ok: false, reason: 'WBS Element Overview button not found' }
+  await settle(p, 2000)
+  ctx.dirty = true
+  return { ok: true, note: `${s.project} "${s.text}" profile ${pv}, WBS overview open` }
+}
+
+async function openProjectFromWorklistQuick(p, project) {
+  const txt = await p.evaluate(() => document.body.innerText)
+  return new RegExp(`(^|\\s)${project.replace(/[/]/g, '\\/')}(\\s|$)`, 'm').test(txt) && /Last Projects Processed/.test(txt)
+}
+
+export async function wbsElements(ctx, s) {
+  const p = ctx.page
+  if (ctx.vars.existing) return { ok: true, note: `${ctx.vars.existing} exists; WBS is checked by Validate, not re-entered` }
+  const findGrid = (field) => gridByField(p, field)
+  const w = await findGrid('RCWBS-IDENT')
+  if (!w) return { ok: false, reason: 'WBS overview grid not found' }
+  const colOf = async (grid, field) => p.evaluate(({ g, f }) => { const e = [...document.querySelectorAll(`[id^="${g}[1,"][id$="_c"]`)].find((x) => (x.getAttribute('lsdata') || '').includes(f)); return e ? +e.id.match(/,(\d+)\]_c$/)[1] : null }, { g: grid, f: field })
+  const G = w.grid
+  const c = { lv: await colOf(G, 'PRPS-STUFE'), id: w.col, desc: await colOf(G, 'PRPS-POST1'), pe: await colOf(G, 'PRPS-PLAKZ'), acct: await colOf(G, 'PRPS-BELKZ') }
+  if (Object.values(c).some((v) => v == null)) return { ok: false, reason: `WBS columns not found: ${JSON.stringify(c)}` }
+  const have = []
+  for (let r = 1; r <= 20; r++) have.push(norm((await cellState(p, G, r, c.id))?.v))
+  let row = have.findIndex((v) => !v) + 1
+  for (const e of s.rows) {
+    if (have.includes(e.wbs)) continue
+    await putCell(p, G, row, c.lv, e.level); await putCell(p, G, row, c.id, e.wbs); await putCell(p, G, row, c.desc, e.desc); row++
+  }
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  const out = []
+  for (let r = 1; r <= 20; r++) {
+    const id = norm((await cellState(p, G, r, c.id))?.v); const e = s.rows.find((x) => x.wbs === id); if (!e) continue
+    for (const k of ['pe', 'acct']) { const st = await cellState(p, G, r, c[k]); if (st && st.checked === false) { await p.mouse.click(st.x, st.y); await sleep(500) } }
+    out.push(id)
+  }
+  await p.keyboard.press('Enter'); await settle(p, 2000)
+  const miss = s.rows.filter((e) => !out.includes(e.wbs)).map((e) => e.wbs)
+  if (miss.length) return { ok: false, reason: `WBS not in grid after Enter: ${miss.join(', ')}` }
+  const tab = await p.evaluate(() => { const e = [...document.querySelectorAll('[role=tab]')].find((x) => /^Responsibilities$/.test(x.innerText.trim())); if (!e) return null; e.scrollIntoView({ block: 'nearest', inline: 'nearest' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (!tab) return { ok: false, reason: 'Responsibilities tab not found' }
+  await p.evaluate(() => { for (const e of document.querySelectorAll('[id$="-mrss-hdr-none"], [id$="-mrss-cont-none"]')) e.scrollLeft = 0 })
+  await p.mouse.click(tab.x, tab.y); await settle(p, 2000)
+  const r2 = await findGrid('PRPS-FKSTL')
+  if (!r2) return { ok: false, reason: 'Responsible cost centre column not found' }
+  const idc = await colOf(r2.grid, 'RCWBS-IDENT') || 3
+  for (let r = 1; r <= 20; r++) { const id = norm((await cellState(p, r2.grid, r, idc))?.v); const e = s.rows.find((x) => x.wbs === id); if (e && norm((await cellState(p, r2.grid, r, r2.col))?.v) !== e.costCenter) await putCell(p, r2.grid, r, r2.col, e.costCenter) }
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  const co = await colOf(r2.grid, 'PRPS-FKOKR')
+  const rb = []
+  for (let r = 1; r <= 20; r++) { const id = norm((await cellState(p, r2.grid, r, idc))?.v); const e = s.rows.find((x) => x.wbs === id); if (!e) continue; const cc = norm((await cellState(p, r2.grid, r, r2.col))?.v); const ca = co ? norm((await cellState(p, r2.grid, r, co))?.v) : ''; if (cc !== e.costCenter) return { ok: false, reason: `${id} cost centre reads "${cc}"` }; rb.push(`${id}:${cc}/${ca}`) }
+  ctx.dirty = true
+  return { ok: true, note: `${rb.length} WBS elements with PE, Acct and cost centres: ${rb.join(', ')}`, readback: rb.join(', ') }
+}
+
 export async function saveProject(ctx, s) {
   const p = ctx.page
   await p.keyboard.press('Control+S'); await settle(p, 4000)
@@ -328,4 +408,4 @@ export async function saveProject(ctx, s) {
   return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
 }
 
-export const RECIPES = { supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
+export const RECIPES = { wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
