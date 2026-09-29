@@ -248,7 +248,7 @@ export async function grids(page) {
     const map = {}
     document.querySelectorAll('[id*="["]').forEach((el) => {
       const m = el.id.match(/^(.*)\[(\d+),(\d+)\](_c)?$/)
-      if (!m || m[4]) return
+      if (!m || m[4] || m[2] === '0') return
       const r = el.getBoundingClientRect()
       if (r.width < 2 || r.height < 2) return
       const g = (map[m[1]] = map[m[1]] || { id: m[1], cells: {}, rows: new Set(), cols: {} })
@@ -262,7 +262,8 @@ export async function grids(page) {
     return Object.values(map).map((g) => {
       const rows = [...g.rows].sort((a, b) => a - b)
       const colHdr = {}
-      Object.entries(g.cols).forEach(([c, info]) => { const firstRow = rows.find((r) => g.cells[`${r},${c}`]); const top = firstRow != null ? g.cells[`${firstRow},${c}`].y : 0; const h = headers.filter((h) => h.l <= info.x && h.rr >= info.x && h.top < top).sort((a, b) => b.top - a.top)[0]; if (h) colHdr[c] = h.t })
+      Object.keys(g.cols).forEach((c) => { const h = document.getElementById(`${g.id}[0,${c}]`); const t = h && (h.getAttribute('title') || h.innerText || '').replace(/\s+/g, ' ').trim(); if (t) colHdr[c] = t })
+      Object.entries(g.cols).forEach(([c, info]) => { if (colHdr[c]) return; const firstRow = rows.find((r) => g.cells[`${r},${c}`]); const top = firstRow != null ? g.cells[`${firstRow},${c}`].y : 0; const h = headers.filter((h) => h.l <= info.x && h.rr >= info.x && h.top < top).sort((a, b) => b.top - a.top)[0]; if (h) colHdr[c] = h.t })
       return { id: g.id, rows, cols: Object.keys(g.cols).map(Number).sort((a, b) => a - b), colHdr, cells: g.cells }
     }).sort((a, b) => b.rows.length * b.cols.length - a.rows.length * a.cols.length)
   })
