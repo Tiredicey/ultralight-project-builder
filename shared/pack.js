@@ -179,7 +179,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'CN41N', label: 'Structure Overview' }),
       S({ op: 'popupField', titles: ['PS info profile', 'PS Info Profile'], value: 'GL01000', optional: true, label: 'PS info profile GL01000' }),
-      S({ op: 'fill', fields: [[['Project'], d.project]], label: 'Selection' }),
+      S({ op: 'fill', fields: [[['Project definition', 'Project'], d.project]], label: 'Selection' }),
       S({ op: 'key', key: 'F8', label: 'Execute' }),
       S({ op: 'shot', name: 't9-structure', caption: `Task 9: Structure overview of ${d.project}` })
     ]
