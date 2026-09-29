@@ -157,6 +157,7 @@ export const TASKS = [
     id: 7, title: 'Release project', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: false,
     steps: (d) => [
       S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
+      S({ op: 'recipe', name: 'treeSelect', args: { ident: d.project, level: 0 }, label: `Select project definition ${d.project}` }),
       S({ op: 'menu', path: ['Edit', 'Status', 'Release'], label: 'Edit > Status > Release' }),
       S({ op: 'expect', statusbar: 'status|set|released', label: 'Status message' }),
       S({ op: 'save', label: 'Save', expect: 'saved|being changed|changed' }),

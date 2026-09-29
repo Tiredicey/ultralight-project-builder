@@ -321,16 +321,29 @@ export async function readCell(page, gridId, row, col) {
 }
 
 export async function clickMenu(page, path) {
-  const mb = await page.evaluate(() => { const e = [...document.querySelectorAll('[role=button], [title], .lsButton')].find((x) => /^Menu/.test((x.innerText || x.getAttribute('title') || '').trim()) && x.getBoundingClientRect().top < 90 && x.getBoundingClientRect().width > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  const items = () => page.evaluate(() => [...document.querySelectorAll('[role=menuitem], [role=menuitemcheckbox]')].map((e) => { const r = e.getBoundingClientRect(); return { t: e.innerText.replace(/\s+/g, ' ').trim(), x: r.left + Math.min(40, r.width / 2), y: r.top + r.height / 2, w: r.width, top: r.top, left: r.left, dis: e.getAttribute('aria-disabled') === 'true' } }).filter((o) => o.w > 0 && o.top > -1000))
+  const mb = await page.evaluate(() => { const e = document.getElementById('cua2sapmenu_btn') || [...document.querySelectorAll('[role=button]')].find((x) => /^Menu/.test((x.innerText || '').trim()) && x.getBoundingClientRect().top < 90); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
   if (!mb) return { ok: false, reason: 'menu button not found' }
-  await page.mouse.click(mb.x, mb.y); await sleep(1500)
-  for (const item of path) {
-    const it = await page.evaluate((src) => { const re = new RegExp(`^\\s*${src}`, 'i'); const all = [...document.querySelectorAll('[role=menuitem], [role=menuitemcheckbox], .lsMnuItem, tr[ct="MI"]')].map((e) => ({ t: e.innerText.replace(/\s+/g, ' ').trim(), r: e.getBoundingClientRect() })).filter((o) => o.r.width > 0 && re.test(o.t)); const m = all[all.length - 1]; return m ? { x: m.r.left + Math.min(40, m.r.width / 2), y: m.r.top + m.r.height / 2, t: m.t } : null }, item)
-    if (!it) return { ok: false, reason: `menu item "${item}" not found` }
-    await page.mouse.click(it.x, it.y)
-    await sleep(1500)
+  await page.mouse.click(mb.x, mb.y); await sleep(1400)
+  let minLeft = -1, prev = null
+  for (const [i, item] of path.entries()) {
+    const re = new RegExp(`^\\s*${item}`, 'i')
+    let it = null
+    for (let k = 0; k < 6 && !it; k++) { it = (await items()).filter((o) => o.left > minLeft && re.test(o.t)).pop(); if (!it) await sleep(500) }
+    if (!it) { await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); return { ok: false, reason: `menu item "${item}" not available${prev ? ` under ${prev}` : ''} (select the right tree node first)` } }
+    if (it.dis) { await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); return { ok: false, reason: `menu item "${it.t}" is disabled` } }
+    if (i < path.length - 1) {
+      if (prev) await page.mouse.move(it.x - 30, it.y, { steps: 4 })
+      await page.mouse.move(it.x, it.y, { steps: 5 }); await sleep(1600)
+      await page.mouse.move(it.left + it.w - 12, it.y, { steps: 6 }); await sleep(400)
+      minLeft = it.left + 20
+    } else {
+      await page.mouse.move(it.x, it.y, { steps: 5 }); await sleep(300)
+      await page.mouse.click(it.x, it.y)
+    }
+    prev = it.t
   }
-  await settle(page, 1500)
+  await settle(page, 2500)
   return { ok: true }
 }
 
