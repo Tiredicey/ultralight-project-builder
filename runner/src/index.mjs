@@ -84,7 +84,8 @@ class Job {
         if (this.stepOnce) { this.paused = true; this.stepOnce = false }
       }
       const ev = this.steps.filter((x) => x.evidenceOnly).length
-      const summary = this.plan.validate ? `${this.results.ok - ev} of ${this.steps.length - ev} checkable tasks pass in SAP${this.results.failed ? `, ${this.results.failed} not complete` : ''}${ev ? `; ${ev} screenshot task(s) to check by eye` : ''}` : `${this.results.ok} verified, ${this.results.manual} by operator, ${this.results.skipped} skipped`
+      const passed = Math.max(0, this.results.ok - this.steps.slice(0, this.idx).filter((x) => x.evidenceOnly).length)
+      const summary = this.plan.validate ? `${passed} of ${this.steps.length - ev} checkable tasks pass in SAP${this.results.failed ? `, ${this.results.failed} not complete` : ''}${ev ? `; ${ev} screenshot task(s) to check by eye` : ''}` : `${this.results.ok} verified, ${this.results.manual} by operator, ${this.results.skipped} skipped`
       await this.flush(this.aborted ? 'aborted' : 'done', { result: { ...this.results, summary } })
       this.ev('info', `Finished: ${summary}`)
     } catch (e) {

@@ -10,7 +10,8 @@
     "start": "node src/index.mjs",
     "setup": "npm install && npx playwright install --with-deps chromium",
     "validate": "node src/validate.mjs",
-    "doctor": "node src/doctor.mjs"
+    "doctor": "node src/doctor.mjs",
+    "probe": "node src/probe.mjs"
   },
   "dependencies": {
     "playwright": "1.63.0"

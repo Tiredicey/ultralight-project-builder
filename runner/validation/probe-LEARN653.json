@@ -1,0 +1,28 @@
+{
+  "user": "LEARN-653",
+  "project": "P/2653",
+  "host": "m53p.ucc.cloud",
+  "client": "236",
+  "at": "2026-09-29T20:22:06.724Z",
+  "steps": [
+    {
+      "step": "login",
+      "ok": true,
+      "reason": null
+    },
+    {
+      "step": "CJ20N worklist",
+      "projects": [
+        "P/9000",
+        "P/9000-1"
+      ]
+    },
+    {
+      "step": "CJ03 P/2653",
+      "fieldFound": true,
+      "title": "Display Project: Initial Screen",
+      "statusbar": "Project P/2653 does not exist View Details",
+      "exists": false
+    }
+  ]
+}

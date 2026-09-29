@@ -123,6 +123,22 @@ Each change fixes a failure seen live on M53:
 | Cost report field labels did not match | Uses the real labels: Project definition, Controlling Area, Version, Fiscal Year ×2, Period Block ×2 (`costReport`) |
 | Save flagged "Project P/2626 is being changed" as failure | That is the WebGUI success text after Ctrl+S in CJ20N; a re-read confirms the data |
 
+## Session 2026-09-29 (LEARN-653, P/2653)
+
+| Item | Result | Source |
+|---|---|---|
+| Live site login as owner | OK, `/api/health` initialized | curl |
+| Oracle runner | online, 1.2.0 | `/api/me/readiness` |
+| Validate run #5, LEARN-626 | SAP rejected the runner's stored password; aborted to avoid a lock | job 5 events |
+| Validate run #6, LEARN-653 | 1 of 11 pass; P/2653 did not exist (`CJ03`: "does not exist") | job 6, `docs/evidence/` |
+| Task 1 for P/2653 | Saved. 6 WBS, PE+Acct, CA EU00, cost centres read back | `docs/evidence/t1-wbs-responsibilities.jpg` |
+| Task 2 activities 0010-0140 + WBS | Saved, network 4000100, tree read back | `docs/evidence/t2-activity-overview.jpg` |
+| Task 2 0045 / 0135, tasks 3-14 | Not done | |
+| Bug fix | Validate summary could print negative counts (`-3 of 11`) after an abort | `runner/src/index.mjs` |
+| New | `npm run probe` read-only check of which projects a user has | `runner/src/probe.mjs` |
+
+Runner machines must `git pull` to get the summary fix. Word report: `python3 scripts/build_report.py`.
+
 ## Not confirmed
 
 - **Tasks 1 and 13 through the runner end-to-end.** Both were already done in SAP (monitor green, invoice visible in the report), so a write run would duplicate data. Task 1 WBS creation and Task 13 FB60 posting still use the original generic steps and hand off to the operator if they miss.
