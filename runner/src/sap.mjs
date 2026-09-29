@@ -185,6 +185,13 @@ export async function selectTreeObject(page, { ident, act, text, level }) {
     let cur = (await treeRows(page)).find((r) => r.ident === hit.ident && r.text === hit.text) || hit
     await where(cur); await sleep(700)
     let pos = await where(cur)
+    for (let k = 0; pos && pos.y < 1 && k < 8; k++) {
+      const tb = await page.evaluate((pre) => { const e = document.getElementById(`${pre}-mrss-cont-left`); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, cur.pre)
+      if (!tb) break
+      await page.mouse.move(tb.x, tb.y); await page.mouse.wheel(0, 400); await settle(page, 900)
+      cur = (await treeRows(page)).find((r) => r.ident === hit.ident && r.text === hit.text) || cur
+      pos = await where(cur)
+    }
     for (let k = 0; pos && !pos.visible && k < 6; k++) {
       Object.assign(hit, cur)
       const c = await collapseOthers()
