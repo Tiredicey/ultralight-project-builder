@@ -117,10 +117,9 @@ export const TASKS = [
     ]
   },
   {
-    id: 3, title: 'Network graph before relationships', role: 'Production Manager', area: 'PS', txn: 'CJ2B', shot: true,
+    id: 3, title: 'Network graph before relationships', role: 'Production Manager', area: 'PS', txn: 'ProjectNetworkGraph', shot: true,
     steps: (d) => [
-      S({ op: 'txn', code: 'CJ2B', label: 'Project planning board' }),
-      S({ op: 'manual', label: 'Load network', instruction: `Enter project ${d.project} and open the network graphic. The Fiori "Project Network Graph" app was not assigned to automation sessions in earlier runs.`, values: { 'Project Definition': d.project } }),
+      S({ op: 'recipe', name: 'networkGraph', args: { project: d.project, min: 14 }, label: `Project Network Graph app, project ${d.project}`, values: { 'Project Definition': d.project } }),
       S({ op: 'shot', name: 't3-network-before', caption: 'Task 3: Network before relationships, all activities start together' })
     ]
   },
@@ -135,10 +134,9 @@ export const TASKS = [
     ]
   },
   {
-    id: 5, title: 'Network graph after relationships', role: 'Production Manager', area: 'PS', txn: 'CJ2B', shot: true,
+    id: 5, title: 'Network graph after relationships', role: 'Production Manager', area: 'PS', txn: 'ProjectNetworkGraph', shot: true,
     steps: (d) => [
-      S({ op: 'txn', code: 'CJ2B', label: 'Project planning board' }),
-      S({ op: 'manual', label: 'Load network', instruction: `Open ${d.project}. Activity 0010 must show four successors (0020, 0030, 0040, 0045). Fit to window before capture.`, values: { 'Project Definition': d.project } }),
+      S({ op: 'recipe', name: 'networkGraph', args: { project: d.project, min: 16 }, label: `Project Network Graph app, project ${d.project}, 0010 fans out to 0020, 0030, 0040, 0045`, values: { 'Project Definition': d.project } }),
       S({ op: 'shot', name: 't5-network-after', caption: 'Task 5: Network graph after 22 finish-to-start relationships' })
     ]
   },

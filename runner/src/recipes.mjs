@@ -238,6 +238,27 @@ export async function extService(ctx, s) {
   return { ok: true, note: `${s.act} service lines entered, total value ${tv?.v || '?'}` }
 }
 
+export async function networkGraph(ctx, s) {
+  const p = ctx.page
+  const url = `https://${ctx.sap.host}/sap/bc/ui2/flp?sap-client=${ctx.sap.client}&sap-language=EN#ProjectNetworkGraph-display`
+  await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
+  const sel = '[id$="smartFilterBar-filterItemControl_BASIC-ProjectExternalID-inner"]'
+  const ok = await p.waitForSelector(sel, { timeout: 90000 }).then(() => true).catch(() => false)
+  if (!ok) return { ok: false, reason: 'Project Network Graph app did not load. The user needs the role for ProjectNetworkGraph-display.' }
+  await sleep(2500)
+  const box = await p.evaluate((q) => { const r = document.querySelector(q).getBoundingClientRect(); return { x: r.left + 20, y: r.top + r.height / 2 } }, sel)
+  await p.mouse.click(box.x, box.y); await sleep(300)
+  await p.keyboard.press('Control+A'); await p.keyboard.type(s.project, { delay: 40 }); await p.keyboard.press('Enter')
+  let n = 0
+  for (let i = 0; i < 40 && n < s.min; i++) { await sleep(1500); n = await p.evaluate(() => (document.body.innerText.match(/\b0\d{3} \| /g) || []).length).catch(() => 0) }
+  if (n < s.min) return { ok: false, reason: `Network graph shows ${n} activities, expected ${s.min}` }
+  const zoom = await p.evaluate(() => { const e = [...document.querySelectorAll('[title="Zoom Out"], [aria-label="Zoom Out"]')].find((x) => x.getBoundingClientRect().width > 0); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (zoom) for (let i = 0; i < (s.zoomOut ?? 4); i++) { await p.mouse.click(zoom.x, zoom.y); await sleep(1200) }
+  await sleep(2000)
+  const starts = await p.evaluate(() => [...new Set((document.body.innerText.match(/Earliest Start \/ Finish:\s*([\d/]+)/g) || []).map((x) => x.split(':')[1].trim()))])
+  return { ok: true, note: `Network graph of ${s.project}: ${n} activities, ${starts.length} distinct earliest start date(s)`, readback: starts.slice(0, 6).join(', ') }
+}
+
 export async function saveProject(ctx, s) {
   const p = ctx.page
   await p.keyboard.press('Control+S'); await settle(p, 4000)
@@ -250,4 +271,4 @@ export async function saveProject(ctx, s) {
   return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
 }
 
-export const RECIPES = { treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
+export const RECIPES = { networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }

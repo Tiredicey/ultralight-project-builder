@@ -6,10 +6,10 @@ import * as pack from '../../shared/pack.js'
 
 const PORT = Number(process.env.DRIVER_PORT || 9333)
 const ctx = { host: process.env.SAP_HOST || 'm53p.ucc.cloud', client: process.env.SAP_CLIENT || '236', user: (process.env.PROBE_USER || '').toUpperCase(), password: process.env.PROBE_PASS || '' }
-const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=384', '--renderer-process-limit=1', '--disable-gpu'] })
 const page = await (await browser.newContext({ viewport: sap.VIEW, locale: 'en-US' })).newPage()
 page.on('dialog', (d) => d.accept().catch(() => {}))
-const rctx = { page, vars: {}, dirty: false }
+const rctx = { page, vars: {}, dirty: false, sap: { host: ctx.host, client: ctx.client } }
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor
 
 createServer(async (req, res) => {

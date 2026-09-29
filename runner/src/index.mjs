@@ -41,7 +41,7 @@ class Job {
     this.stepOnce = false; this.aborted = false; this.seq = 0; this.lastHash = ''; this.lastFrameAt = 0; this.activeAt = Date.now(); this.target = null
     this.ctx = { host: SAP_HOST, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '' }
     this.results = { ok: 0, failed: 0, manual: 0, skipped: 0 }
-    this.rctx = { page: null, vars: {}, dirty: false }
+    this.rctx = { page: null, vars: {}, dirty: false, sap: { host: SAP_HOST, client: SAP_CLIENT } }
   }
 
   ev(level, message, stepKey, data) { this.events.push({ level, message, stepKey, data }); log(level.toUpperCase(), stepKey || '', message) }
@@ -178,7 +178,7 @@ class Job {
     this.ev('ok', `Evidence captured: ${caption}`, null)
   }
 
-  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss', 'popupField'].includes(s.op) && !(s.op === 'recipe' && ['treeSelect', 'costReport'].includes(s.name)) }
+  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss', 'popupField'].includes(s.op) && !(s.op === 'recipe' && ['treeSelect', 'costReport', 'networkGraph'].includes(s.name)) }
 
   async verify(note, extra = {}) {
     const sb = await statusbar(this.page)
