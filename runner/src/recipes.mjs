@@ -396,16 +396,72 @@ export async function wbsElements(ctx, s) {
   return { ok: true, note: `${rb.length} WBS elements with PE, Acct and cost centres: ${rb.join(', ')}`, readback: rb.join(', ') }
 }
 
+export async function activities(ctx, s) {
+  const p = ctx.page
+  const node = ctx.vars.network ? { ident: ctx.vars.network } : { ident: s.project, level: 1 }
+  const o = await openOverview(ctx, node, ['Activity Overview'])
+  if (!o.ok) return o
+  await clickTab(p, ['Int. Processing', 'Internal Processing'])
+  const f = await gridByField(p, 'AFVGD-LTXA1')
+  if (!f) return { ok: false, reason: 'Internal processing grid not found' }
+  const G = f.grid
+  const col = async (field) => p.evaluate(({ g, fl }) => { const e = [...document.querySelectorAll(`[id^="${g}[1,"][id$="_c"]`)].find((x) => (x.getAttribute('lsdata') || '').includes(fl)); return e ? +e.id.match(/,(\d+)\]_c$/)[1] : null }, { g: G, fl: field })
+  const c = { desc: f.col, dur: await col('AFVGD-DAUNO'), work: await col('AFVGD-ARBEI'), wc: await col('AFVGD-ARBPL'), wbs: await col('AFVGD-PROJN'), act: 1 }
+  if (Object.values(c).some((v) => v == null)) return { ok: false, reason: `Activity columns not found: ${JSON.stringify(c)}` }
+  const rowOf = async (act) => { for (let r = 1; r < 40; r++) { const v = norm((await cellState(p, G, r, c.act))?.v); if (v === act) return r } return null }
+  const show = async (r) => { await p.evaluate((id) => document.getElementById(id)?.scrollIntoView({ block: 'center' }), `${G}[${r},${c.act}]_c`); await sleep(300) }
+  for (const a of s.rows) {
+    let r = await rowOf(a.act)
+    if (r == null) {
+      for (let k = 1; k < 40; k++) { const st = await cellState(p, G, k, c.act); const d = await cellState(p, G, k, c.desc); if (st && st.vis && (!norm(st.v) || !norm(d?.v)) && !s.rows.some((x) => x.act === norm(st.v))) { r = k; break } }
+      if (r == null) { await p.keyboard.press('Enter'); await settle(p, 1500); for (let k = 1; k < 40; k++) { const st = await cellState(p, G, k, c.act); const d = await cellState(p, G, k, c.desc); if (st && (!norm(st.v) || !norm(d?.v))) { r = k; break } } }
+      if (r == null) return { ok: false, reason: `No free row for ${a.act}` }
+      await show(r); await putCell(p, G, r, c.act, a.act)
+    }
+    await show(r)
+    for (const [k, v] of [['desc', a.desc], ['dur', a.dur], ['work', a.work], ['wc', a.wc]]) if (num((await cellState(p, G, r, c[k]))?.v) !== num(v) && norm((await cellState(p, G, r, c[k]))?.v) !== v) await putCell(p, G, r, c[k], v)
+  }
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  for (const a of s.rows) { const r = await rowOf(a.act); if (r == null) return { ok: false, reason: `${a.act} missing after Enter` }; if (norm((await cellState(p, G, r, c.wbs))?.v) !== a.wbs) { await show(r); await putCell(p, G, r, c.wbs, a.wbs) } }
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  const bad = []
+  for (const a of s.rows) { const r = await rowOf(a.act); const got = [norm((await cellState(p, G, r, c.desc))?.v), num((await cellState(p, G, r, c.dur))?.v), num((await cellState(p, G, r, c.work))?.v), norm((await cellState(p, G, r, c.wc))?.v), norm((await cellState(p, G, r, c.wbs))?.v)]; if (got[0] !== a.desc || got[1] !== a.dur || got[2].replace(/\.0$/, '') !== a.work || got[3] !== a.wc || got[4] !== a.wbs) bad.push(`${a.act}: ${got.join('|')}`) }
+  if (bad.length) return { ok: false, reason: `Read-back differs: ${bad.slice(0, 4).join('; ')}` }
+  ctx.dirty = true
+  return { ok: true, note: `${s.rows.length} activities with duration, work, work centre and WBS read back` }
+}
+
+export async function primaryCost(ctx, s) {
+  const p = ctx.page
+  const o = await openOverview(ctx, ctx.vars.network ? { ident: ctx.vars.network } : { ident: s.project, level: 1 }, ['Activity Overview'])
+  if (!o.ok) return o
+  if (!(await clickTab(p, ['Prim. Costs', 'Primary Costs']))) return { ok: false, reason: 'Prim. Costs tab not found' }
+  const g = await gridWithHeader(p, /^Cost Element$/i)
+  if (!g) return { ok: false, reason: 'Primary cost grid not found' }
+  const c = { act: g.colOf(/^Activity$/i), desc: g.colOf(/Short Text|Description/i), amt: g.colOf(/^Amount$/i), ce: g.colOf(/^Cost Element$/i) }
+  let r = null
+  for (let k = 1; k < 20; k++) { const v = norm((await cellState(p, g.id, k, c.act))?.v); if (v === s.act) { r = k; break } }
+  if (r != null && num((await cellState(p, g.id, r, c.amt))?.v) !== '0' && norm((await cellState(p, g.id, r, c.ce))?.v) === s.costElem) return { ok: true, note: `${s.act} already has primary cost ${norm((await cellState(p, g.id, r, c.amt))?.v)} on ${s.costElem}; left unchanged` }
+  if (r == null) for (let k = 1; k < 20; k++) { const d = norm((await cellState(p, g.id, k, c.desc))?.v); if (!d) { r = k; break } }
+  for (const [k, v] of [['act', s.act], ['desc', s.desc], ['amt', s.amount], ['ce', s.costElem]]) await putCell(p, g.id, r, c[k], v)
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  const got = [norm((await cellState(p, g.id, r, c.act))?.v), norm((await cellState(p, g.id, r, c.desc))?.v), num((await cellState(p, g.id, r, c.amt))?.v), norm((await cellState(p, g.id, r, c.ce))?.v)]
+  if (got[0] !== s.act || got[2] !== s.amount || got[3] !== s.costElem) return { ok: false, reason: `Primary cost row reads ${got.join(' | ')}` }
+  ctx.dirty = true
+  return { ok: true, note: `${s.act} ${got[1]} ${got[2]} EUR on ${got[3]}` }
+}
+
 export async function saveProject(ctx, s) {
   const p = ctx.page
+  if (!ctx.dirty && ctx.vars.existing) return { ok: true, note: `Nothing entered for ${ctx.vars.existing}, save skipped` }
   await p.keyboard.press('Control+S'); await settle(p, 4000)
   for (let i = 0; i < 4; i++) { const t = await popupText(p); if (!t) break; if (/Network number|Search and Select/.test(t)) await dialogButton(p, ['Cancel']); else if (!(await handlePopups(p, [/^Yes$/i, /^Ja$/i, /^Save$/i, /^Continue$/i, /^OK$/i]))?.clicked) await p.keyboard.press('Enter'); await settle(p, 1500) }
   const sb = await statusbar(p)
   const wrote = ctx.dirty
   ctx.dirty = false
   if (new RegExp(s.expect || 'saved|being changed|created|posted', 'i').test(sb)) return { ok: true, note: `Saved: ${sb}`, statusbar: sb }
-  if (/data not changed|no changes/i.test(sb) && !wrote) return { ok: true, note: `Nothing to save, SAP already holds the data (${sb})`, statusbar: sb }
+  if ((/data not changed|no changes/i.test(sb) || !sb) && !wrote) return { ok: true, note: `Nothing to save, SAP already holds the data (${sb})`, statusbar: sb }
   return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
 }
 
-export const RECIPES = { wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
+export const RECIPES = { activities, primaryCost, wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }

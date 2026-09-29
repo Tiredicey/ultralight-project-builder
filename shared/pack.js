@@ -94,19 +94,12 @@ export const TASKS = [
     id: 2, title: 'Activities, external processing, primary costs', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: true,
     steps: (d) => [
       S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
-      S({ op: 'overview', node: d.project, button: ['Activity Overview'], label: 'Activity Overview on top WBS' }),
-      S({ op: 'tab', names: ['Int. Processing', 'Internal Processing'], optional: true, label: 'Internal processing tab' }),
-      S({ op: 'grid', label: 'Enter 14 activities', columns: { act: ['Activity'], desc: ['Description', 'Operation short text'], dur: ['Normal dur', 'Normal duration', 'Duration'], work: ['Work'], wc: ['Work center', 'Work Center'] }, fallback: { act: 1, desc: 2, dur: 3, work: 5, wc: 7 }, rows: d.activities.map(({ act, desc, dur, work, wc }) => ({ act, desc, dur, work, wc })) }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm activities' }),
-      S({ op: 'grid', label: 'Assign activities to WBS', columns: { wbs: ['WBS element', 'WBS Element'] }, fallback: { wbs: 22 }, match: { key: 'act', columns: ['Activity'] }, rows: d.activities.map(({ act, wbs }) => ({ act, wbs })) }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm WBS assignment' }),
+      S({ op: 'recipe', name: 'activities', args: { project: d.project, rows: d.activities }, label: '14 activities with duration, work, work centre and WBS', values: Object.fromEntries(d.activities.map((a) => [a.act, `${a.desc} · ${a.dur} d · ${a.work} h · ${a.wc} · ${a.wbs}`])) }),
       S({ op: 'shot', name: 't2-activity-overview', caption: 'Task 2: Activity Overview, activities 0010 to 0140 with duration, work, work centre and WBS' }),
       S({ op: 'save', label: 'Save activities', expect: 'saved|being changed|changed' }),
       S({ op: 'openProject', project: d.project, label: `Reopen ${d.project}` }),
       S({ op: 'recipe', name: 'extService', args: { act: d.external.act, desc: d.external.desc, lines: d.external.lines }, label: `External activity ${d.external.act} with service lines 10 and 20`, values: { Activity: '0045', Description: d.external.desc, 'Line 10': 'Engineering 1 EA 2000', 'Line 20': 'Ext. production 1 EA 3000' } }),
-      S({ op: 'tab', names: ['Prim. Costs', 'Primary Costs'], label: 'Primary costs tab' }),
-      S({ op: 'grid', label: 'Primary cost 0135', columns: { act: ['Activity'], desc: ['Description'], amount: ['Amount'], ce: ['Cost Elem', 'Cost Element'] }, fallback: { act: 1, desc: 2, amount: 3, ce: 5 }, rows: [{ act: d.primCost.act, desc: d.primCost.desc, amount: d.primCost.amount, ce: d.primCost.costElem }] }),
-      S({ op: 'key', key: 'Enter', label: 'Confirm primary cost' }),
+      S({ op: 'recipe', name: 'primaryCost', args: { project: d.project, act: d.primCost.act, desc: d.primCost.desc, amount: d.primCost.amount, costElem: d.primCost.costElem }, label: `Primary cost ${d.primCost.act} ${d.primCost.amount} EUR on ${d.primCost.costElem}`, values: { Activity: d.primCost.act, Description: d.primCost.desc, Amount: d.primCost.amount, 'Cost Elem.': d.primCost.costElem } }),
       S({ op: 'save', label: 'Save project', expect: 'saved|changed' })
     ]
   },
