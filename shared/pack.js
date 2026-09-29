@@ -195,6 +195,7 @@ export const TASKS = [
   {
     id: 11, title: 'Confirm 35 h on 0010', role: 'AR Accountant', area: 'PS', txn: 'CN25', shot: true,
     steps: (d) => [
+      S({ op: 'openProject', project: d.project, label: `Read network number of ${d.project}` }),
       S({ op: 'txn', code: 'CN25', label: 'Confirm network activity' }),
       S({ op: 'recipe', name: 'confirmActivity', args: { act: d.confirmation.act, actual: d.confirmation.actual, remaining: d.confirmation.remaining }, label: 'Actual work 35 h, partial confirmation, dates cleared, remaining 45 h' }),
       S({ op: 'shot', name: 't11-confirmation', caption: 'Task 11: Actual work 35 of 80 hours, remaining 45 hours' }),
@@ -213,12 +214,9 @@ export const TASKS = [
   {
     id: 13, title: 'Supplier invoice 9,700 EUR', role: 'AR Accountant', area: 'FI', txn: 'FB60', shot: false,
     steps: (d) => [
+      S({ op: 'openProject', project: d.project, label: `Read network number of ${d.project}` }),
       S({ op: 'txn', code: 'FB60', label: 'Enter incoming invoice' }),
-      S({ op: 'popupField', titles: ['Company Code'], value: d.companyCode, optional: true, label: 'Company code DE00' }),
-      S({ op: 'fill', fields: [[['Vendor', 'Supplier'], d.invoice.supplier], [['Invoice date'], '{TODAY}'], [['Amount'], d.invoice.amount], [['Text'], d.invoice.text]], label: 'Header' }),
-      S({ op: 'check', titles: ['Calculate tax', 'Calculate Tax'], optional: true, label: 'Calculate tax' }),
-      S({ op: 'grid', label: 'G/L line', columns: { gl: ['G/L acct', 'G/L Account'], amt: ['Amount in doc.curr.', 'Amount'], tax: ['Tax code', 'Tax Code'] }, rows: [{ gl: d.invoice.gl, amt: '*', tax: d.invoice.tax }] }),
-      S({ op: 'manual', label: 'Network and activity', instruction: `Scroll right to the Network column, F4 > Networks for a Project Definition > ${d.project}, pick the network, set Activity ${d.invoice.act}, press Enter until the balance is 0.00.`, values: { 'Project Definition': d.project, Activity: d.invoice.act } }),
+      S({ op: 'recipe', name: 'supplierInvoice', args: { companyCode: d.companyCode, supplier: d.invoice.supplier, amount: d.invoice.amount, text: d.invoice.text, gl: d.invoice.gl, tax: d.invoice.tax, act: d.invoice.act }, label: `Invoice ${d.invoice.supplier} ${d.invoice.amount} EUR on G/L ${d.invoice.gl}, network activity ${d.invoice.act}`, values: { Supplier: d.invoice.supplier, Amount: d.invoice.amount, Text: d.invoice.text, 'G/L': d.invoice.gl, 'Tax code': d.invoice.tax, Activity: d.invoice.act } }),
       S({ op: 'save', label: 'Post', expect: 'Document \\d+ was posted|posted' })
     ]
   },

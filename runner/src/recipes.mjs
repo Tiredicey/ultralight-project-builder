@@ -288,6 +288,34 @@ export async function networkGraph(ctx, s) {
   return { ok: true, note: `Network graph of ${s.project}: ${n} activities, ${starts.length} distinct earliest start date(s)`, readback: starts.slice(0, 6).join(', ') }
 }
 
+export async function supplierInvoice(ctx, s) {
+  const p = ctx.page
+  const net = s.network || ctx.vars.network
+  if (!net) return { ok: false, reason: 'Network number unknown. Run a Project Builder step first so the runner reads it from the tree.' }
+  if (/Company Code/i.test(await popupText(p))) { const f = await findByLabel(p, ['Company Code']); if (f) { await typeInto(p, f, s.companyCode); await p.keyboard.press('Enter'); await settle(p, 2500) } }
+  const t = new Date(); const today = `${String(t.getMonth() + 1).padStart(2, '0')}/${String(t.getDate()).padStart(2, '0')}/${t.getFullYear()}`
+  const head = [[['Account or Matchcode for the Next Line Item', 'Vendor', 'Supplier'], s.supplier], [['Invoice Date in Document', 'Invoice date'], today], [['Amount in document currency'], s.amount], [['Item Text'], s.text]]
+  for (const [labels, v] of head) { const f = await findByLabel(p, labels); if (!f) return { ok: false, reason: `FB60 field ${labels[0]} not found` }; await typeInto(p, f, v); await p.keyboard.press('Tab'); await sleep(300) }
+  await p.keyboard.press('Enter'); await settle(p, 2500)
+  for (let k = 0; k < 3 && (await popupText(p)); k++) await handlePopups(p, [/^Continue$/i, /^OK$/i, /^Yes$/i])
+  const g = await gridWithHeader(p, /^G\/L Account$/i)
+  if (!g) return { ok: false, reason: 'G/L line item grid not found' }
+  const c = { gl: g.colOf(/^G\/L Account$/i), amt: g.colOf(/^Amount$/i), tax: g.colOf(/^Tax Code$/i), net: g.colOf(/^Network$/i), act: g.colOf(/^Activity$/i) }
+  if (Object.values(c).some((v) => v == null)) return { ok: false, reason: `G/L grid columns missing: ${Object.entries(c).filter(([, v]) => v == null).map(([k]) => k).join(', ')}` }
+  for (const [col, v] of [[c.gl, s.gl], [c.amt, '*'], [c.tax, s.tax]]) await putCell(p, g.id, 1, col, v)
+  await putCell(p, g.id, 1, c.net, net)
+  await putCell(p, g.id, 1, c.act, s.act)
+  await p.keyboard.press('Enter'); await settle(p, 3000)
+  for (let k = 0; k < 3 && (await popupText(p)); k++) await handlePopups(p, [/^Continue$/i, /^OK$/i, /^Yes$/i])
+  const bal = (await findByLabel(p, ['Display Balance']))?.v || ''
+  const line = [await cellState(p, g.id, 1, c.gl), await cellState(p, g.id, 1, c.amt), await cellState(p, g.id, 1, c.net), await cellState(p, g.id, 1, c.act)].map((x) => norm(x?.v))
+  const sb = await statusbar(p)
+  if (num(bal) !== '0' && num(bal) !== '0.00') return { ok: false, reason: `Balance is ${bal}, not 0.00. Line: ${line.join(' / ')}. ${sb}` }
+  if (line[2] !== net || line[3] !== s.act) return { ok: false, reason: `Line item shows network ${line[2]} activity ${line[3]}. ${sb}` }
+  ctx.dirty = true
+  return { ok: true, note: `Invoice ready: supplier ${s.supplier}, ${s.amount} EUR, G/L ${line[0]}, network ${net} activity ${s.act}, balance ${bal}`, readback: line.join(' / ') }
+}
+
 export async function saveProject(ctx, s) {
   const p = ctx.page
   await p.keyboard.press('Control+S'); await settle(p, 4000)
@@ -300,4 +328,4 @@ export async function saveProject(ctx, s) {
   return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
 }
 
-export const RECIPES = { networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
+export const RECIPES = { supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
