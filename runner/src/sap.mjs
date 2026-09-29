@@ -188,7 +188,8 @@ export async function selectTreeObject(page, { ident, act, text, level }) {
     for (let k = 0; pos && pos.y < 1 && k < 8; k++) {
       const tb = await page.evaluate((pre) => { const e = document.getElementById(`${pre}-mrss-cont-left`); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, cur.pre)
       if (!tb) break
-      await page.mouse.move(tb.x, tb.y); await page.mouse.wheel(0, 400); await settle(page, 900)
+      const dir = await page.evaluate(({ pre, row }) => { const v = [...document.querySelectorAll(`tr[id^="${pre}-mrss-cont-left-Row-"]`)].filter((l) => l.getBoundingClientRect().height > 0).map((l) => +l.id.split('-Row-')[1]); return v.length && +row < Math.min(...v) ? -1 : 1 }, cur)
+      await page.mouse.move(tb.x, tb.y); await page.mouse.wheel(0, 400 * dir); await settle(page, 900)
       cur = (await treeRows(page)).find((r) => r.ident === hit.ident && r.text === hit.text) || cur
       pos = await where(cur)
     }
@@ -357,4 +358,24 @@ export async function handlePopups(page, prefer = [/^Yes$/i, /^Ja$/i, /^Continue
 
 export async function cellState(page, gridId, row, col) {
   return page.evaluate((id) => { const t = document.getElementById(`${id}_c`); const e = t || document.getElementById(id); if (!e) return null; const r = e.getBoundingClientRect(); const ck = e.getAttribute('aria-checked'); return { v: ('value' in e ? e.value : e.innerText || '').trim(), checked: ck == null ? null : ck === 'true', x: r.left + r.width / 2, y: r.top + r.height / 2, vis: r.height > 0 } }, `${gridId}[${row},${col}]`)
+}
+
+export async function clearOwnLocks(page, ctx) {
+  await gotoTxn(page, ctx, 'SM12')
+  const f = await findByLabel(page, [/User name/i])
+  if (!f) return { ok: false, reason: 'SM12 user field not found' }
+  await typeInto(page, f, ctx.user); await page.keyboard.press('F8'); await settle(page, 2500)
+  const n = Number(((await statusbar(page)).match(/(\d+) locks? ha/) || [])[1] || 0)
+  if (!n) return { ok: true, cleared: 0 }
+  const own = await page.evaluate((u) => [...document.querySelectorAll('tr')].filter((r) => r.innerText.includes(u)).length, ctx.user)
+  if (own < n) return { ok: false, reason: `SM12 shows locks of other users (${own}/${n}); left untouched` }
+  const sel = await page.evaluate(() => { const hs = [...document.querySelectorAll('[role=columnheader]')].filter((h) => h.getBoundingClientRect().width > 0); const h = hs.find((x) => /select all/i.test(x.innerText + (x.getAttribute('title') || '') + (x.getAttribute('aria-label') || ''))) || hs[0]; if (!h) return null; const r = h.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (!sel) return { ok: false, reason: 'SM12 select-all not found' }
+  await page.mouse.click(sel.x, sel.y); await settle(page, 800)
+  if (!(await clickTitle(page, ['Delete Selected Locks']))) return { ok: false, reason: 'SM12 delete button not found' }
+  await settle(page, 1500)
+  await dialogButton(page, ['Delete', 'Yes'])
+  await typeInto(page, (await findByLabel(page, [/User name/i])), ctx.user); await page.keyboard.press('F8'); await settle(page, 2500)
+  const left = Number(((await statusbar(page)).match(/(\d+) locks? ha/) || [])[1] || 0)
+  return { ok: left === 0, cleared: n - left, reason: left ? `${left} lock(s) remain` : null }
 }

@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
 import { Checker } from './checks.mjs'
 import { loadEnv, localAccounts } from './env.mjs'
@@ -232,6 +232,15 @@ class Job {
       }
       if (!hit) return { ok: false, reason: `Could not open ${s.project} from the worklist or Open dialog` }
       await settle(p, 2500)
+      if (/not all objects were locked|locked by|is currently being processed/i.test(await statusbar(p)) || /Display (project|network)/i.test(await p.title())) {
+        this.lockTries = (this.lockTries || 0) + 1
+        if (this.lockTries > 2) return { ok: false, reason: `${s.project} opens in display mode: still locked after releasing stale locks twice` }
+        const lk = await clearOwnLocks(p, this.ctx)
+        this.ev(lk.ok ? 'warn' : 'error', lk.ok ? `Released ${lk.cleared} stale SAP lock(s) of ${this.ctx.user} left by an earlier session` : `Project locked: ${lk.reason}`, s.key)
+        if (!lk.ok) return { ok: false, reason: `${s.project} is locked and the lock could not be released: ${lk.reason}` }
+        return { redo: true }
+      }
+      this.lockTries = 0
       const title = await p.title()
       if (!title.includes(s.project)) return { ok: false, reason: `${s.project} not open, title is "${title}"` }
       await expandProjectTree(p)
