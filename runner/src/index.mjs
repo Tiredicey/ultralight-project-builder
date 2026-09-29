@@ -121,7 +121,7 @@ class Job {
 
   async pushFrame(force = false) {
     if (!this.page || this.page.isClosed()) return
-    const buf = await this.page.screenshot({ type: 'jpeg', quality: 55, timeout: 8000 }).catch(() => null)
+    const buf = await this.snap(55).catch(() => null)
     if (!buf) return
     const hash = createHash('sha1').update(buf).digest('hex')
     if (!force && hash === this.lastHash && Date.now() - this.lastFrameAt < 10000) return
@@ -171,8 +171,17 @@ class Job {
     if (!this.aborted) await this.flush('running')
   }
 
+  async snap(quality = 82) {
+    const fast = this.rctx.vars.fastShot
+    const buf = await this.page.screenshot({ type: 'jpeg', quality, timeout: fast ? 8000 : 30000, animations: 'disabled' }).catch(() => null)
+    if (buf) return buf
+    const cdp = await this.page.context().newCDPSession(this.page)
+    const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality }).finally(() => cdp.detach().catch(() => {}))
+    return Buffer.from(r.data, 'base64')
+  }
+
   async evidence(name, caption, task) {
-    const buf = await this.page.screenshot({ type: 'jpeg', quality: 82 })
+    const buf = await this.snap(82)
     await call(`/jobs/${this.job.id}/evidence`, { name, caption, task, kind: 'screenshot', mime: 'image/jpeg', body: buf.toString('base64') })
     const dom = await captureDom(this.page)
     const sb = await statusbar(this.page)
@@ -200,6 +209,7 @@ class Job {
       if (dcs === 'retry') return { redo: true }
       return { ok: true, warn: true, manual: true, note: `${s.label}: done by operator`, statusbar: await statusbar(p) }
     }
+    if (s.op !== 'shot') this.rctx.vars.fastShot = false
     if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); return r.ok ? { ok: true, note: `${s.code} open`, statusbar: r.statusbar } : r }
     if (s.op === 'dismiss') { const r = await handlePopups(p, (s.buttons || []).map((b) => new RegExp(`^${b}$`, 'i'))); return { ok: true, note: r ? `Popup handled: ${r.clicked || 'left open'}` : 'No popup' } }
     if (s.op === 'key') { await p.keyboard.press(s.key); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.key} pressed`) }
