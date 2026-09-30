@@ -77,7 +77,7 @@ class Job {
         if (out.ok) {
           if (out.manual) this.results.manual++; else this.results.ok++
           this.ev(out.warn ? 'warn' : 'ok', out.note || s.label || s.op, s.key, { statusbar: out.statusbar, readback: out.readback }); this.idx++
-          if (out.skipTask) { const n = this.steps.slice(this.idx).filter((x) => x.task === s.task && x.op !== 'shot').length; while (this.idx < this.steps.length && this.steps[this.idx].task === s.task && this.steps[this.idx].op !== 'shot') this.idx++; this.results.skipped += n; this.ev('info', `Task ${s.task}: ${n} step(s) skipped, already done in SAP`, s.key) }
+          if (out.skipTask) { let n = 0; while (this.idx < this.steps.length && this.steps[this.idx].task === s.task) { this.idx++; n++ } this.results.skipped += n; this.ev('info', `Task ${s.task}: already done in SAP, ${n} remaining step(s) skipped (no duplicate posting, no new screenshot)`, s.key) }
         }
         else if (out.skipped) { this.results.skipped++; this.ev('warn', `Skipped: ${out.reason || s.label}`, s.key); this.idx++ }
         else if (out.soft) { this.results.failed++; this.ev('error', out.reason, s.key); this.idx++ }

@@ -154,7 +154,7 @@ export const TASKS = [
     id: 8, title: 'Planned cost report', role: 'Controller', area: 'CO', txn: 'S_ALR_87013542', shot: false,
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Project costs Act/Comm/Total/Plan' }),
-      S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile GL01000' }),
+      S({ op: 'popupField', titles: ['Database Profile', 'Database prof', 'Profile'], value: 'GL01000', optional: true, label: 'Database profile GL01000' }),
       S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea }, label: 'Selection and execute' }),
       S({ op: 'shot', name: 't8-costs-planned', caption: 'Task 8: Planned costs after release' })
     ]
@@ -163,7 +163,7 @@ export const TASKS = [
     id: 9, title: 'Structure overview', role: 'Shop Floor Worker', area: 'PS', txn: 'CN41N', shot: true,
     steps: (d) => [
       S({ op: 'txn', code: 'CN41N', label: 'Structure Overview' }),
-      S({ op: 'popupField', titles: ['PS info profile', 'PS Info Profile'], value: 'GL01000', optional: true, label: 'PS info profile GL01000' }),
+      S({ op: 'popupField', titles: ['PS info profile', 'PS Info Profile', 'Profile'], value: 'GL01000', optional: true, label: 'PS info profile GL01000' }),
       S({ op: 'fill', fields: [[['Project definition', 'Project'], d.project]], label: 'Selection' }),
       S({ op: 'key', press: 'F8', label: 'Execute' }),
       S({ op: 'shot', name: 't9-structure', caption: `Task 9: Structure overview of ${d.project}` })
@@ -192,7 +192,7 @@ export const TASKS = [
     id: 12, title: 'Cost report after confirmation', role: 'Controller', area: 'CO', txn: 'S_ALR_87013542', shot: true,
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
-      S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
+      S({ op: 'popupField', titles: ['Database Profile', 'Database prof', 'Profile'], value: 'GL01000', optional: true, label: 'Database profile' }),
       S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, costElement: '8000000', expectActual: 1750 }, label: 'Execute, expect actual 1,750.00 EUR on 8000000 Labor' }),
       S({ op: 'shot', name: 't12-costs-after-confirmation', caption: 'Task 12: Actual costs 1,750.00 EUR after confirmation' })
     ]
@@ -211,7 +211,7 @@ export const TASKS = [
     id: 14, title: 'Final cost report', role: 'Controller', area: 'CO', txn: 'S_ALR_87013542', shot: true,
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
-      S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
+      S({ op: 'popupField', titles: ['Database Profile', 'Database prof', 'Profile'], value: 'GL01000', optional: true, label: 'Database profile' }),
       S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expectActual: 11450 }, label: 'Execute, expect actual 11,450.00 EUR (1,750 + 9,700)' }),
       S({ op: 'shot', name: 't14-costs-final', caption: 'Task 14: Actual costs after supplier invoice' })
     ]

@@ -3,7 +3,7 @@ const out = []
 const revive = (a = {}) => ({ ...a, flags: a.flags?.map((f) => new RegExp(f, 'i')), checks: a.checks?.map((f) => new RegExp(f, 'i')) })
 let skip = null
 for (const s of plan.steps) {
-  if (skip === s.task && s.op !== 'shot') { out.push(`${s.key} skipped (already done)`); continue }
+  if (skip === s.task) { out.push(`${s.key} skipped (already done)`); continue }
   let r
   try {
     if (s.op === 'openProject') {
