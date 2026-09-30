@@ -61,6 +61,15 @@ Passwords in `SAP_ACCOUNTS` never leave this machine. Leave the password empty (
 npm start
 ```
 
+Optional:
+
+```
+MAX_JOBS=            # parallel jobs on this runner; empty = what memory fits (about 450 MB each, max 8)
+ONLY_ACCOUNTS=       # e.g. LEARN-653 to make this runner take only that account; empty = any
+```
+
+The owner can also limit a token in Owner console > Runners (Save limit; empty = any account). A job runs only where the token limit, `ONLY_ACCOUNTS` and a password (in `SAP_ACCOUNTS` or typed at run time) all allow it. A second job on an account that is already running is refused, so different accounts never collide.
+
 To keep it running: `npx pm2 start "npm start" --name ultralight-runner && npx pm2 save`. Set `HEADLESS=false` to watch the browser locally.
 
 ## 4. Running

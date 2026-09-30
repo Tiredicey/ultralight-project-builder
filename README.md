@@ -139,13 +139,46 @@ Each change fixes a failure seen live on M53:
 
 Runner machines must `git pull` to get the summary fix. Word report: `python3 scripts/build_report.py`.
 
+## Session 2026-09-30: Autopilot results, runner 1.3, many accounts
+
+| Item | Result | Source |
+|---|---|---|
+| Autopilot run #9, LEARN-653, tasks 1-14 | done, 84 steps, 72 verified, 12 skipped as already done, 0 failed, 0 by operator | job 9 events |
+| Validate run #11 | 11 of 11 pass | job 11 |
+| Observe #12, Assist #13 | done; Observe rejects canvas input | jobs 12, 13 |
+| Autopilot run #18, task 9 | CN41N profile popup now filled (the run #9 screenshot still showed the popup) | job 18, `docs/evidence/job18-t9-structure.jpg` |
+| SAP state P/2653 | network 4000100, status REL, milestones 255/256/257, FB60 document 1900000063, report actual 11,450.00, commitment 5,000.00, plan 49,433.14 | S_ALR_87013542 read-back |
+| Word report | `python3 scripts/build_report.py` builds `IT2406_Performance_Task_1_Ultralight_Bike_LEARN-653.docx` | |
+
+### Many accounts at once
+
+Nothing is tied to one account. Project, supplier and PS text come from the three digits of `LEARN-###` (`P/2###`, `114###`, `PH-###-1`), so any account gets its own objects.
+
+- **One job per SAP account.** The site returns 409 for a second active job on the same user. SAP allows one dialog session, and this also stops two runs from writing to the same project.
+- **Different accounts run side by side.** For example, LEARN-653 can be on Task 5 while LEARN-### runs Tasks 1-14. Each job gets its own browser context and SAP session, and they share no state.
+- **No double claims.** A claim is an atomic `UPDATE ... WHERE status = 'queued'`. The runner sends the accounts it is already running (`busy`), and the site skips those.
+- **Scaling.** Add more runners, or raise `MAX_JOBS` on one runner. `MAX_JOBS` defaults to what memory fits (about 450 MB per job, at most 8).
+- **Limits.**
+  - A token can be limited to accounts (set when it is created, or later with Owner console > Runners > Save limit, `PUT /api/admin/runners/:id`).
+  - A runner can limit itself with `ONLY_ACCOUNTS=LEARN-653`.
+  - An empty limit means any account.
+- **Allowlist several accounts at once.** Enter `LEARN-101, LEARN-102 LEARN-103`. Each value is checked, and anything that is not `LEARN-` plus three digits is rejected.
+- **Queue warning.** If no runner may take the account (limit, `ONLY_ACCOUNTS`, or no password), or none is online, the site says so when the job is queued.
+- **Stale jobs.** A claimed job that never starts is re-queued after 2 minutes. A running job whose runner goes silent for 3 minutes is failed, which frees the account.
+
+Tested locally (wrangler + D1):
+- 5 accounts (653, 626, two random ones, 777) with 3 tokens (any, only 653, two random) and two processes on the same token.
+- Every account was claimed exactly once and every limit held.
+- A second job for 653 got 409, and `LEARN-12` was rejected.
+
+On the live site, multi-add, Save limit and the queue warning were checked with curl.
+
 ## Not confirmed
 
-- **Tasks 1 and 13 through the runner end-to-end.** Both were already done in SAP (monitor green, invoice visible in the report), so a write run would duplicate data. Task 1 WBS creation and Task 13 FB60 posting still use the original generic steps and hand off to the operator if they miss.
-- **Task 2 `extService` recipe.** Written from the verified manual flow (grid `2B257`, service-spec lines 10 and 20, total 5,000.00), but not replayed, because 0045 already exists and the recipe skips it.
-- **Tasks 3 and 5 network graph.** The pack keeps `CJ2B` with a manual hand-off. I did not open `CJ2B` on M53.
-- **Step 13 on the grading monitor.** The report shows 9,700.00 posted. Whether the monitor turns Step 13 green is only visible to the user.
-- **Cloudflare deployment.** Not deployed from this session.
+- **Grading monitor percentage.** The grading app is not assigned to LEARN-653, so only the student can read it.
+- **Oracle runner.** It still reports 1.2.0, and its stored LEARN-626 password is rejected by SAP ("Client, name, or password is not correct"). Fix it on the VM: `git pull && cd runner && npm install`, correct `SAP_ACCOUNTS`, restart. I have no access to that VM.
+- **Two real SAP runs at the same time.** The claim logic was tested with stub runners. Only one real account password was available here (LEARN-653), so two live SAP runs side by side were not run from this sandbox.
+- **Task 3 "before" screenshot.** The saved capture was taken after the relationships existed.
 
 ## Stack
 
