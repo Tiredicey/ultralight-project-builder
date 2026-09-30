@@ -1,4 +1,4 @@
-import { openProjectFromWorklist, settle, captureDom, statusbar, popupText, findByLabel, typeInto, clickTitle, selectTreeObject, treeRows, expandProjectTree, grids, cellState, dialogButton, dialogPickRow, handlePopups, clickTab } from './sap.mjs'
+import { waitPopup, openProjectFromWorklist, settle, captureDom, statusbar, popupText, findByLabel, typeInto, clickTitle, selectTreeObject, treeRows, expandProjectTree, grids, cellState, dialogButton, dialogPickRow, handlePopups, clickTab } from './sap.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const norm = (v) => String(v ?? '').trim()
@@ -202,7 +202,7 @@ export async function confirmSave(ctx) {
 
 export async function costReport(ctx, s) {
   const p = ctx.page
-  if (/Database prof/i.test(await popupText(p))) { const f = await findByLabel(p, ['Database prof', 'Profile']); if (f) { await typeInto(p, f, 'GL01000'); await p.keyboard.press('Enter'); await settle(p, 2000) } }
+  if (await waitPopup(p, /Database prof/i, 6000)) { const f = await findByLabel(p, ['Database prof', 'Profile']); if (f) { await typeInto(p, f, 'GL01000'); await p.keyboard.press('Enter'); await settle(p, 2000) } }
   const y = new Date().getFullYear()
   const fill = [[['Project definition'], 0, s.project], [['Controlling Area'], 0, s.coArea], [['Version'], 0, '0'], [['Fiscal Year'], 0, String(y)], [['Fiscal Year'], 1, String(y + 1)], [['Period Block', 'Period'], 0, '1'], [['Period Block', 'Period'], 1, '12']]
   for (const [labels, n, v] of fill) { const f = await findByLabel(p, labels, ['input'], n); if (!f) return { ok: false, reason: `Selection field ${labels[0]} #${n + 1} not found` }; await typeInto(p, f, v); await p.keyboard.press('Tab'); await sleep(200) }

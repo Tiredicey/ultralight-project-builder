@@ -51,7 +51,7 @@ export async function statusbar(page) {
 
 export async function popupText(page) {
   return page.evaluate(() => {
-    const p = [...document.querySelectorAll('[role=dialog], .lsPopupWindow, .urPWFloatLeft')].filter((el) => el.getBoundingClientRect().width > 0)
+    const p = [...document.querySelectorAll('[role=dialog], .lsPopupWindow, .urPWFloatLeft')].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && el.id !== 'sysInfoAreaMenu' && el.getAttribute('role') !== 'menu' })
     return p.map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim()).join(' | ').slice(0, 600)
   }).catch(() => '')
 }
@@ -391,4 +391,10 @@ export async function clearOwnLocks(page, ctx) {
   await typeInto(page, (await findByLabel(page, [/User name/i])), ctx.user); await page.keyboard.press('F8'); await settle(page, 2500)
   const left = Number(((await statusbar(page)).match(/(\d+) locks? ha/) || [])[1] || 0)
   return { ok: left === 0, cleared: n - left, reason: left ? `${left} lock(s) remain` : null }
+}
+
+export async function waitPopup(page, re, ms = 8000) {
+  const end = Date.now() + ms
+  while (Date.now() < end) { const t = await popupText(page); if (t && (!re || re.test(t))) return t; await sleep(400) }
+  return ''
 }

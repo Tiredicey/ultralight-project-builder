@@ -1,12 +1,13 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
 import { Checker } from './checks.mjs'
 import { loadEnv, localAccounts } from './env.mjs'
 import { VERSION } from './version.mjs'
 import { hostname, cpus, totalmem } from 'node:os'
 
+const escRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const toRe = (v) => (v instanceof RegExp ? v : new RegExp(String(v), 'i'))
 const reviveArgs = (a = {}) => ({ ...a, flags: a.flags ? a.flags.map(toRe) : a.flags, checks: a.checks ? a.checks.map(toRe) : a.checks })
 
@@ -268,7 +269,7 @@ class Job {
     if (s.op === 'expectText') { await settle(p, 800); const found = await p.evaluate((t) => (document.body?.innerText || '').includes(t), s.text); return found ? { ok: true, note: `Found ${s.text}`, readback: s.text } : { ok: false, reason: `Value ${s.text} not on screen. Verify the report manually.` } }
     if (s.op === 'expectField') { const f = await findByLabel(p, s.titles); if (!f) return { ok: false, reason: `Field ${s.titles[0]} not found` }; if (s.contains) return String(f.v).includes(s.contains) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected to contain ${s.contains}` }; const v = (f.v || '').replace(/[^\d.,]/g, ''); return parseFloat(v.replace(/,/g, '')) === Number(s.value) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected ${s.value}` } }
     if (s.op === 'popupField') {
-      const txt = await popupText(p)
+      const txt = await waitPopup(p, new RegExp(s.titles.map(escRe).join('|'), 'i'), s.wait || 8000) || await popupText(p)
       if (!txt) return s.optional ? { ok: true, note: 'No popup, value not required' } : { ok: false, reason: 'Popup not shown' }
       const f = await findByLabel(p, s.titles)
       if (!f) return s.optional ? { ok: true, warn: true, note: `Popup "${txt.slice(0, 60)}" without ${s.titles[0]}` } : { ok: false, reason: `${s.titles[0]} not in popup` }
