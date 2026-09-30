@@ -12,3 +12,4 @@ logs/
 runner/validation/*.png
 .work/
 .browsers/
+*.docx
