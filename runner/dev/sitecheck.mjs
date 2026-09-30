@@ -12,7 +12,7 @@ for (const [tag, opts] of [['d', { viewport: { width: 1440, height: 900 }, color
   const errs = []
   p.on('pageerror', (e) => errs.push(e.message))
   p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()) })
-  await p.goto(url, { waitUntil: 'networkidle' })
+  await p.goto(url, { waitUntil: 'load', timeout: 60000 })
   await p.waitForTimeout(2500)
   const login = await p.evaluate(() => { const v = document.querySelector('.dmz-video video'); return { video: v ? { playing: !v.paused, t: +v.currentTime.toFixed(1), ready: v.readyState } : null, marquee: document.querySelectorAll('.marquee img').length, overflowX: document.documentElement.scrollWidth > innerWidth } })
   await shot(p, `${out}/${tag}-login.jpg`)

@@ -174,6 +174,15 @@ Tested locally (wrangler + D1):
 On the live site, multi-add, Save limit and the queue warning were checked with curl.
 
 
+## Interface (2026-09-30)
+
+- **Login page:** a 29 s looping background video made from real screenshots of this site and of SAP P/2653, plus a moving strip of 7 real screenshots. The headline types itself out and the three facts count up. The form has a show/hide password button and a loading spinner.
+- **Every signed-in page has its own header:** its own colour set, animated drawing, background screenshot and outline word (Launch, Live, Sheet, Ready, Proof, Model, Setup, Keys). Each menu item uses its page's colour.
+- **Motion:** slow colour-blob background with drifting dots, cards that fade in as you scroll, fades between pages, a pulsing frame on the live canvas, moving lines on the network plan.
+- **Accessibility:** if your system is set to reduce motion, all of this stops, the video is paused and everything shows at once. Printing hides the decoration. There is still one main heading per page.
+- **Checking it:** `runner/dev/sitecheck.mjs` logs in to the live site and checks every page in dark, light, phone (390 px) and reduced-motion mode. On 2026-09-30 it found 0 script errors, no sideways scrolling, and nothing left invisible on screen. The video played, except in reduced-motion mode where it stays paused on purpose.
+- **Media:** `public/static/media/`, about 3 MB. The images are WebP files made from captures in `docs/evidence` and live-site screenshots. There are no stock photos.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.
