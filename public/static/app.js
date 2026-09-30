@@ -1,3 +1,4 @@
+import { hero, mountBackdrop, setScene, reveal, tilt, typeLine, countUp, transition, media } from './fx.js'
 const $ = (s, r = document) => r.querySelector(s)
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '')
@@ -48,60 +49,90 @@ async function boot() {
 
 function render() {
   stopTimers()
+  mountBackdrop()
   if (!S.user) return renderAuth()
-  if (S.user.status !== 'approved') return renderPending()
+  document.body.classList.remove('dmz')
+  if (S.user.status !== 'approved') { setScene('admin'); return renderPending() }
+  setScene(S.view)
   renderShell()
 }
 
+let settleObs
+const settle = () => { const v = $('#view'); if (!v) return; settleObs?.disconnect(); let q = 0; settleObs = new MutationObserver(() => { if (q) return; q = requestAnimationFrame(() => { q = 0; reveal(v); countUp(v); tilt(v) }) }); settleObs.observe(v, { childList: true, subtree: true }); reveal(v) }
+
 function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'login') {
   const first = S.health && !S.health.initialized
+  setScene(null)
+  document.body.classList.add('dmz')
+  const shots = [['sap-network.webp', 'Task 5 network graph, P/2653'], ['sap-costs.webp', 'Task 14 cost report, 11,450.00 actual'], ['shot-canvas.webp', 'Live canvas streaming SAP'], ['sap-wbs.webp', 'Task 1 WBS responsibilities'], ['shot-plan.webp', 'Project data network plan'], ['sap-invoice.webp', 'Task 13 supplier invoice 9,700 EUR'], ['sap-structure.webp', 'Task 9 structure overview']]
   $('#app').innerHTML = `
-  <main class="auth">
+  <main class="auth dmz-auth">
+    <div class="dmz-video" aria-hidden="true">
+      <video autoplay muted loop playsinline preload="metadata" poster="${media}bg-poster.webp"><source src="${media}bg-loop.mp4" type="video/mp4"></video>
+      <i class="dmz-tint"></i><i class="dmz-grid"></i>
+    </div>
     <section class="auth-story">
       <div class="brand"><img src="/static/icon.svg" alt="">Ultralight Project Builder</div>
-      <div>
-        <h1>Drive SAP PS and FI from a live canvas, with the owner holding the keys.</h1>
-        <p class="lead">A browser subagent runs the IT2406 Performance Task 1 pack on SAP WebGUI, streams every frame with a DOM map, and hands control back to you whenever SAP needs a human.</p>
+      <div class="dmz-copy">
+        <span class="kicker"><span class="kdot"></span>SAP PS and FI, 14 tasks, one canvas</span>
+        <h1 class="dmz-title">Build the <span class="grad">Ultralight Bike</span> project<span class="typed-line"><span class="typed" id="typed"></span></span></h1>
+        <p class="lead">A runner drives SAP WebGUI for you, streams every frame here, reads each result back from SAP, and hands control to you whenever SAP needs a person.</p>
+        <div class="auth-facts">
+          <div><b data-count="14">14</b>tasks end to end</div>
+          <div><b data-count="84">84</b>Autopilot steps</div>
+          <div><b data-count="11450" data-dec="2">11,450.00</b>EUR actual, read back</div>
+        </div>
       </div>
-      <div class="auth-facts small muted">
-        <div><b>M53 / 236</b>SAP system and client</div>
-        <div><b>14 tasks</b>Project P/2### end to end</div>
-        <div><b>Owner gate</b>No access until approved</div>
+      <div class="marquee" aria-label="Real screenshots from the site and SAP">
+        <div class="marquee-track">${[...shots, ...shots].map(([f, c], i) => `<figure ${i >= shots.length ? 'aria-hidden="true"' : ''}><img src="${media}${f}" alt="${i >= shots.length ? '' : esc(c)}" loading="lazy" decoding="async"><figcaption>${esc(c)}</figcaption></figure>`).join('')}</div>
       </div>
     </section>
     <section class="auth-form">
-      <form id="authForm" novalidate>
+      <form id="authForm" class="glass" novalidate data-tilt>
         <div class="seg" role="group" aria-label="Choose form">
           <button type="button" data-m="login" aria-pressed="${mode === 'login'}">Sign in</button>
           <button type="button" data-m="register" aria-pressed="${mode === 'register'}">Request access</button>
         </div>
-        <h2>${mode === 'login' ? 'Sign in' : first ? 'Create the owner account' : 'Request access'}</h2>
-        ${first && mode === 'register' ? '<p class="small muted">No accounts exist yet. The first account becomes the owner who approves everyone else.</p>' : ''}
+        <h2>${mode === 'login' ? 'Welcome back' : first ? 'Create the owner account' : 'Request access'}</h2>
+        <p class="small muted">${mode === 'login' ? 'Sign in with the email the owner approved.' : first ? 'No accounts exist yet. The first account becomes the owner who approves everyone else.' : 'The owner approves each request and grants a SAP account.'}</p>
         ${mode === 'register' ? '<div class="field"><label for="name">Name</label><input class="input" id="name" name="name" autocomplete="name" required></div>' : ''}
         <div class="field"><label for="email">Email</label><input class="input" id="email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="10" required></div>
+        <div class="field"><label for="password">Password</label><div class="pw"><input class="input" id="password" name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="10" required><button type="button" class="btn sm ghost" id="pwEye" aria-label="Show password" aria-pressed="false">Show</button></div></div>
         ${mode === 'register' && first && S.health.setupKeyRequired ? '<div class="field"><label for="setupKey">Setup key</label><input class="input" id="setupKey" name="setupKey" type="password" required></div>' : ''}
         ${mode === 'register' && !first ? '<div class="field"><label for="note">Why you need access (optional)</label><input class="input" id="note" name="note" placeholder="Section, SAP user LEARN-###"></div>' : ''}
-        <button class="btn primary" type="submit">${mode === 'login' ? 'Sign in' : first ? 'Create owner' : 'Send request'}</button>
+        <button class="btn primary big" type="submit"><span>${mode === 'login' ? 'Sign in' : first ? 'Create owner' : 'Send request'}</span><i class="shine" aria-hidden="true"></i></button>
+        <p class="small muted dmz-foot">SAP M53 · client 236 · the owner approves every account</p>
       </form>
     </section>
   </main>`
   document.querySelectorAll('[data-m]').forEach((b) => b.addEventListener('click', () => renderAuth(b.dataset.m)))
+  $('#pwEye').onclick = (e) => { const i = $('#password'); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; e.target.textContent = show ? 'Hide' : 'Show'; e.target.setAttribute('aria-pressed', String(show)) }
+  typeLine($('#typed'), ['on autopilot.', 'with you in the loop.', 'for any LEARN-###.', 'verified in SAP.'])
+  countUp($('.auth-facts'))
+  tilt($('#app'))
+  const vid = $('.dmz-video video')
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { vid.removeAttribute('autoplay'); vid.pause() }
   $('#authForm').addEventListener('submit', run(async (e) => {
     e.preventDefault()
-    const body = Object.fromEntries(new FormData(e.target))
-    const r = await http(`/auth/${mode}`, { method: 'POST', body })
-    S.user = r.user
-    S.health = { ...S.health, initialized: true }
-    render()
+    const btn = e.target.querySelector('[type=submit]')
+    btn.disabled = true; btn.classList.add('busy')
+    try {
+      const body = Object.fromEntries(new FormData(e.target))
+      const r = await http(`/auth/${mode}`, { method: 'POST', body })
+      S.user = r.user
+      S.health = { ...S.health, initialized: true }
+      document.body.classList.remove('dmz')
+      transition(render)
+    } finally { if (btn.isConnected) { btn.disabled = false; btn.classList.remove('busy') } }
   }))
 }
 
 function renderPending() {
   $('#app').innerHTML = `
-  <main class="center"><div class="stack" style="max-width:460px">
+  <main class="center pending-scene"><div class="stack glass" style="max-width:500px">
     <div class="brand" style="justify-content:center"><img src="/static/icon.svg" alt="">Ultralight Project Builder</div>
-    <h1>Waiting for the owner</h1>
+    <div class="hourglass" aria-hidden="true"><i></i><i></i><i></i></div>
+    <h1>Waiting for the <span class="grad">owner</span></h1>
     <p class="muted">Your request as <b>${esc(S.user.email)}</b> is <span class="pill ${S.user.status === 'pending' ? 'warn' : 'err'}">${esc(S.user.status)}</span>. The owner must approve you and grant a SAP account before the canvas unlocks. This page checks every 15 seconds.</p>
     <div class="row" style="justify-content:center"><button class="btn" id="recheck">Check now</button><button class="btn ghost" id="out">Sign out</button></div>
   </div></main>`
@@ -139,7 +170,9 @@ function renderShell() {
   $('#logout').onclick = logout
   $('#logout2').onclick = logout
   const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin }
+  scrollTo({ top: 0 })
   ;(views[S.view] || viewLaunch)()
+  settle()
 }
 
 function go(view, arg) {
@@ -147,7 +180,7 @@ function go(view, arg) {
   if (view === 'canvas' && arg) S.pendingJob = Number(arg)
   const h = arg ? `${view}/${arg}` : view
   if (location.hash.slice(1) !== h) history.replaceState(null, '', `#${h}`)
-  render()
+  transition(render)
 }
 
 async function viewLaunch() {
@@ -159,8 +192,7 @@ async function viewLaunch() {
   if (!S.selTasks.size) pack.tasks.forEach((t) => S.selTasks.add(t.id))
   const a = S.accounts.find((x) => x.sap_user === S.selAccount)
   v.innerHTML = `
-  <div class="head"><div><h1>Run the PS and FI pack</h1><p>Pick an allowlisted SAP account in client ${esc(pack.client)}, choose tasks, then watch and steer on the live canvas. Runs are one at a time per SAP user because WebGUI allows one dialog session per run.</p></div>
-  <span class="pill ${S.runnersOnline ? 'ok' : 'err'}">${S.runnersOnline ? `${S.runnersOnline} runner online` : 'No runner online'}</span></div>
+  ${hero('launch', { title: 'Run the <span class="grad">PS and FI</span> pack', text: `Pick an allowlisted SAP account in client ${esc(pack.client)}, choose tasks, then watch and steer on the live canvas. One run per SAP user at a time, because WebGUI allows one dialog session.`, meta: `<span class="pill ${S.runnersOnline ? 'ok' : 'err'}"><i class="live-dot"></i>${S.runnersOnline ? `${S.runnersOnline} runner online` : 'No runner online'}</span><span class="pill">${pack.tasks.length} tasks</span><span class="pill">${S.accounts.length} account${S.accounts.length === 1 ? '' : 's'}</span>` })}
   ${S.accounts.length ? '' : `<div class="card" style="margin-bottom:1rem"><h3>No SAP account granted yet</h3><p class="muted small">${S.user.role === 'owner' ? 'Add LEARN-### accounts in the Owner console, then grant them.' : 'Ask the owner to grant you a LEARN-### account.'}</p></div>`}
   <form class="launch" id="launch">
     <section class="card stack">
@@ -214,7 +246,7 @@ async function viewCanvas() {
   if (!S.pendingJob && !S.job) {
     const r = await http('/jobs')
     const live = r.jobs.find((x) => ['running', 'paused', 'waiting', 'claimed', 'queued'].includes(x.status)) || r.jobs[0]
-    if (!live) { v.innerHTML = '<div class="center"><div class="stack"><h1>No runs yet</h1><p class="muted">Start a run to open the live canvas.</p><div><button class="btn primary" id="toLaunch">Run pack</button></div></div></div>'; $('#toLaunch').onclick = () => go('launch'); return }
+    if (!live) { v.innerHTML = hero('canvas', { title: 'No runs <span class="grad">yet</span>', text: 'Start a run from Run pack. The live SAP screen streams here while it works.' }) + '<div class="center"><div class="stack"><div><button class="btn primary" id="toLaunch">Run pack</button></div></div></div>'; $('#toLaunch').onclick = () => go('launch'); return }
     S.pendingJob = live.id
   }
   const id = S.pendingJob || S.job.id
@@ -223,7 +255,7 @@ async function viewCanvas() {
   await loadJob(id)
   if (location.hash.slice(1) !== `canvas/${id}`) history.replaceState(null, '', `#canvas/${id}`)
   v.innerHTML = `
-  <div class="head"><div><h1>Run #${id} · ${esc(S.job.sap_user)}</h1><p id="jobline"></p></div><div class="row" id="jobactions"></div></div>
+  ${hero('canvas', { title: `Run <span class="grad">#${id}</span> · ${esc(S.job.sap_user)}`, text: '<span id="jobline"></span>', actions: '<div class="row" id="jobactions"></div>' })}
   <div class="canvas-wrap">
     <section>
       <div class="viewport" id="vp" tabindex="0" aria-label="Live SAP canvas. Click to interact, type while focused.">
@@ -381,7 +413,7 @@ async function viewJobs() {
   let detail = null
   if (focus) detail = await http(`/jobs/${focus}`).catch(() => null)
   v.innerHTML = `
-  <div class="head"><div><h1>Runs and evidence</h1><p>Every screenshot and DOM capture a run produced, labelled by task and transaction. Download them for the Word deliverable.</p></div>${S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : ''}</div>
+  ${hero('jobs', { title: 'Runs and <span class="grad">evidence</span>', text: 'Every screenshot and DOM capture a run produced, labelled by task and transaction. Download them for the Word deliverable.', actions: S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : '' })}
   <div class="grid3">
     <section class="card scroll" style="grid-column:span 1">
       <table class="t"><thead><tr><th>#</th><th>Account</th><th>Status</th><th>When</th></tr></thead><tbody>
@@ -443,8 +475,7 @@ async function viewPlan() {
   const desc = Object.fromEntries(acts.map((a) => [a.act, a.desc]))
   const svg = `<svg class="net" viewBox="0 0 ${svgW} ${svgH}" role="img" aria-label="Network plan with critical path"><defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="currentColor" stroke="none"/></marker></defs>${d.relationships.map((r) => { const a = pos[r.from], b = pos[r.to]; if (!a || !b) return ''; const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2, mx = (x1 + x2) / 2; const crit = c.crit.has(r.from) && c.crit.has(r.to) && c.ef[r.from] === c.es[r.to]; return `<path class="${crit ? 'crit' : ''}" style="color:var(${crit ? '--accent' : '--muted'})" marker-end="url(#ar)" d="M${x1} ${y1}C${mx} ${y1} ${mx} ${y2} ${x2 - 2} ${y2}"/>` }).join('')}${acts.map((a) => { const p = pos[a.act]; return `<g class="node${c.crit.has(a.act) && Number(a.dur) > 0 ? ' crit' : ''}"><title>${esc(a.act)} ${esc(a.desc)}, ES ${c.es[a.act]} EF ${c.ef[a.act]}</title><rect x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="8"/><text x="${p.x + 10}" y="${p.y + 18}">${a.act}${Number(a.dur) ? ` · ${a.dur}d` : ''}</text><text class="d" x="${p.x + 10}" y="${p.y + 34}">${esc(desc[a.act].slice(0, 20))}${desc[a.act].length > 20 ? '…' : ''}</text></g>` }).join('')}</svg>`
   v.innerHTML = `
-  <div class="head"><div><h1>Project data for ${esc(d.project)}</h1><p>Every value the pack types, generated from the task sheet with suffix ${esc(d.suffix)}. The network is computed from the 22 relationships with finish-to-start logic and normal durations.</p></div>
-  <select class="input" id="planAcc" style="max-width:14rem" aria-label="Account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select></div>
+  ${hero('plan', { title: `Project data for <span class="grad">${esc(d.project)}</span>`, text: `Every value the pack types, generated from the task sheet with suffix ${esc(d.suffix)}. The network is computed from the 22 relationships with finish-to-start logic and normal durations.`, actions: `<select class="input" id="planAcc" style="max-width:14rem" aria-label="Account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
   <section class="card stack" style="margin-bottom:1rem">
     <div class="row" style="justify-content:space-between"><h2>Network plan</h2><span class="small muted">Zero-float activities ${[...c.crit].filter((n) => Number(acts.find((a) => a.act === n).dur) > 0).sort().join(', ')} · project length ${c.end} working days</span></div>
     <div class="scroll">${svg}</div>
@@ -494,11 +525,7 @@ async function viewSheet() {
   const focus = Number(location.hash.split('/')[1]) || 0
   const d = sheet.data
   v.innerHTML = `
-  <div class="head no-print"><div><h1>Task sheet for ${esc(sheet.project)}</h1><p>Every value the pack types for ${esc(sheet.sapUser)}, task by task, with what a correct result looks like in SAP. Print it or save it as a PDF to keep beside SAP, or check your own work against it.</p></div>
-    <div class="row">
-      <select class="input" id="sheetAcc" style="max-width:12rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>
-      <button class="btn primary" id="printSheet">Print / Save as PDF</button>
-    </div></div>
+  <div class="no-print">${hero('sheet', { title: `Task sheet for <span class="grad">${esc(sheet.project)}</span>`, text: `Every value the pack types for ${esc(sheet.sapUser)}, task by task, with what a correct result looks like in SAP. Print it or save it as a PDF to keep beside SAP, or check your own work against it.`, actions: `<div class="row"><select class="input" id="sheetAcc" style="max-width:12rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select><button class="btn primary" id="printSheet">Print / Save as PDF</button></div>` })}</div>
   <div class="sheet-layout">
     <nav class="card sheet-toc no-print" aria-label="Tasks">
       <h3>Tasks</h3>
@@ -507,7 +534,7 @@ async function viewSheet() {
       ${doc ? `<p class="small"><a href="#" id="openDoc">Open ${esc(doc.name)}</a></p>` : S.user.role !== 'user' ? '<p class="small muted">Upload the official task PDF in the Owner console to link its pages here.</p>' : ''}
     </nav>
     <div class="stack sheet-body">
-      <section class="card print-only"><h1>IT2406 Performance Task 1 · ${esc(sheet.sapUser)} · ${esc(sheet.project)}</h1><p>Generated ${esc(new Date().toLocaleString())} from the Ultralight Project Builder pack.</p></section>
+      <section class="card print-only"><h2>IT2406 Performance Task 1 · ${esc(sheet.sapUser)} · ${esc(sheet.project)}</h2><p>Generated ${esc(new Date().toLocaleString())} from the Ultralight Project Builder pack.</p></section>
       <section class="card"><h2>Key values</h2><dl class="kv" style="margin-top:.6rem">
         <dt>Project</dt><dd class="mono">${esc(d.project)} · ${esc(d.projectText)}</dd><dt>Profile</dt><dd class="mono">${esc(d.profile)}</dd>
         <dt>CO area / company code</dt><dd class="mono">${esc(d.controllingArea)} / ${esc(d.companyCode)}</dd><dt>Supplier</dt><dd class="mono">${esc(d.supplier)}</dd>
@@ -580,7 +607,7 @@ async function viewReady() {
     </ul></section>`
   }).join('')
   v.innerHTML = `
-  <div class="head"><div><h1>Readiness</h1><p>Everything a run needs, checked from here. Runners report their host and SAP reachability every 10 minutes. The task grid comes from the last <b>Validate</b> run, which reads SAP without changing anything.</p></div><button class="btn" id="reRead">Refresh</button></div>
+  ${hero('ready', { title: '<span class="grad">Readiness</span>', text: 'Everything a run needs, checked from here. Runners report their host and SAP reachability every 10 minutes. The task grid comes from the last <b>Validate</b> run, which reads SAP without changing anything.', actions: '<button class="btn" id="reRead">Refresh</button>' })}
   <section class="card" style="margin-bottom:1rem"><ul class="ready">
     ${item(r.runners.length > 0, 'Runner token issued', r.runners.length ? `${r.runners.length} active token(s)` : 'none', owner ? 'Owner console > Runners > Create token' : 'Ask the owner')}
     ${item(onlineRunners.length > 0, 'A runner is online', onlineRunners.length ? esc(onlineRunners.map((x) => x.name).join(', ')) : 'none online right now', 'Start a runner. To keep one running with your PC off, host it on Oracle Cloud (Setup guide)')}
@@ -625,7 +652,7 @@ async function paintDocs() {
 function viewGuide() {
   const origin = location.origin
   $('#view').innerHTML = `
-  <div class="head"><div><h1>Setup guide</h1><p>Three pieces: this control site on Cloudflare, one runner on a machine that can reach SAP, and your approval for every user.</p></div></div>
+  ${hero('guide', { title: 'Setup <span class="grad">guide</span>', text: 'Three pieces: this control site on Cloudflare, one runner on a machine that can reach SAP, and your approval for every user.' })}
   <div class="grid2 guide">
     <section class="card"><h2>Owner: first run</h2><ol>
       <li>Sign up first. The first account becomes the owner. If <code>SETUP_KEY</code> is set, enter it.</li>
@@ -680,8 +707,7 @@ async function viewAdmin() {
   const a = await http('/admin/overview')
   S.admin = a
   v.innerHTML = `
-  <div class="head"><div><h1>Owner console</h1><p>Nobody reaches the canvas until you approve them and grant a SAP account. Every decision lands in the audit log.</p></div>
-  <label class="row small">Registration <select class="input" id="reg" style="width:auto"><option ${a.registration === 'open' ? 'selected' : ''} value="open">open</option><option ${a.registration === 'closed' ? 'selected' : ''} value="closed">closed</option></select></label></div>
+  ${hero('admin', { title: 'Owner <span class="grad">console</span>', text: 'Nobody reaches the canvas until you approve them and grant a SAP account. Every decision lands in the audit log.', meta: `<span class="pill warn">${a.users.filter((u) => u.status === 'pending').length} pending</span><span class="pill">${a.users.length} people</span><span class="pill">${a.accounts.length} SAP accounts</span><span class="pill ok">${a.runners.filter((r) => r.online && !r.revoked).length} runners online</span>`, actions: `<label class="row small">Registration <select class="input" id="reg" style="width:auto"><option ${a.registration === 'open' ? 'selected' : ''} value="open">open</option><option ${a.registration === 'closed' ? 'selected' : ''} value="closed">closed</option></select></label>` })}
   <section class="card scroll" style="margin-bottom:1rem"><h2>People</h2>
     <table class="t" style="margin-top:.5rem"><thead><tr><th>User</th><th>Status</th><th>Role</th><th>SAP accounts</th><th></th></tr></thead><tbody>
     ${a.users.map((u) => `<tr><td><b>${esc(u.name)}</b><div class="small muted">${esc(u.email)}</div>${u.note ? `<div class="small">${esc(u.note)}</div>` : ''}</td>
