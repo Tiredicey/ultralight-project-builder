@@ -42,6 +42,7 @@ export class Checker {
     this.rec('pstext', `PS text ${d.psText}`, ps, ps ? 'node under top WBS' : 'not in tree')
     const ms = d.milestones.filter((m) => !rows.some((r) => r.text === m.desc))
     this.rec('milestones', 'milestones 00004, 00005, 00006', !ms.length, ms.length ? `missing ${ms.map((m) => m.desc).join(', ')}` : 'all three in tree')
+    await selectTreeObject(page, { ident: d.project, level: 0 }).catch(() => null)
     const st = await findByLabel(page, ['System Status'])
     this.rec('release', 'System status contains REL', /REL/.test(st?.v || ''), st?.v || 'field not found')
   }
