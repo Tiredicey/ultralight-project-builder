@@ -232,8 +232,6 @@ export const planFor = (sapUser, taskIds) => {
 
 export const taskSummary = () => TASKS.map(({ id, title, role, area, txn, shot }) => ({ id, title, role, area, txn, shot }))
 
-// What a correct result looks like in SAP, per task. Used by the task sheet ("how to check") and by
-// the runner's read-only validate op, which runs the listed check ids and reports pass/fail per task.
 export const CHECKS = {
   1: { how: (d) => `CJ20N, open ${d.project}: tree shows ${d.project} and ${d.project}-1 to -5. Responsibilities tab shows the cost centres, controlling area ${d.controllingArea}.`, ids: ['wbs'] },
   2: { how: () => 'Tree under the network shows activities 0010 to 0140, plus 0045 (external) and 0135 (primary cost). 0045 has service lines 10 and 20.', ids: ['activities'] },
@@ -251,7 +249,6 @@ export const CHECKS = {
   14: { how: () => 'Cost report: all cost elements actual 11,450.00 EUR (1,750 + 9,700).', ids: ['finalActual'] }
 }
 
-// Printable task sheet: every value the pack types, per task, plus how to check it by hand.
 export const taskSheet = (sapUser) => {
   const sfx = suffixOf(sapUser)
   if (!sfx) throw new Error('SAP user must look like LEARN-###')
@@ -285,7 +282,6 @@ const sheetValues = (s) => {
   return null
 }
 
-// Plan for a read-only validate job: login, then one validate step per selected task.
 export const validatePlan = (sapUser, taskIds) => {
   const sfx = suffixOf(sapUser)
   if (!sfx) throw new Error('SAP user must look like LEARN-###')

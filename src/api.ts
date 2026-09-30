@@ -17,7 +17,6 @@ export const RUNNER_LATEST = '1.3.0'
 const DOC_CHUNK = 900_000
 const DOC_MAX = 20 * 1024 * 1024
 
-// Tables added after 0001. CREATE IF NOT EXISTS, so a deploy that skipped `db:migrate:prod` still works.
 let ensured = false
 const ensureSchema = async (c: Context<Env>) => {
   if (ensured) return
@@ -190,7 +189,6 @@ api.get('/me/plan/:sapUser', async (c) => {
 
 api.get('/me/sheet/:sapUser', (c) => c.json(taskSheet(c.req.param('sapUser'))))
 
-// Readiness: everything that must be true before a run can succeed, from the caller's point of view.
 api.get('/me/readiness', async (c) => {
   const u = c.get('user')
   const priv = u.role === 'owner' || u.role === 'admin'
@@ -465,7 +463,8 @@ api.post('/runner/claim', async (c) => {
   const only = (Array.isArray(b.only) ? b.only : []).map((s: string) => String(s).toUpperCase())
   const busy = (Array.isArray(b.busy) ? b.busy : []).map((s: string) => String(s).toUpperCase())
   await recoverStale(c)
-  const { results } = await c.env.DB.prepare("SELECT * FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 50").all<any>()
+  const skip = busy.length ? ` AND sap_user NOT IN (${busy.map(() => '?').join(',')})` : ''
+  const { results } = await c.env.DB.prepare(`SELECT * FROM jobs WHERE status = 'queued'${skip} ORDER BY id LIMIT 500`).bind(...busy).all<any>()
   const job = results.find((x) => (allowed.length === 0 || allowed.includes(x.sap_user)) && (only.length === 0 || only.includes(x.sap_user)) && !busy.includes(x.sap_user) && (local.includes(x.sap_user) || !!x.secret))
   if (!job) return c.json({ job: null })
   const upd = await c.env.DB.prepare("UPDATE jobs SET status = 'claimed', runner_id = ?, started_at = ? WHERE id = ? AND status = 'queued'").bind(r.id, now(), job.id).run()

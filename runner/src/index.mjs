@@ -19,7 +19,8 @@ const SAP_HOST = process.env.SAP_HOST || 'm53p.ucc.cloud'
 const SAP_CLIENT = process.env.SAP_CLIENT || '236'
 const HEADLESS = process.env.HEADLESS !== 'false'
 const LOCAL = localAccounts()
-const MAX_JOBS = Math.max(1, Math.min(4, Number(process.env.MAX_JOBS) || 1))
+const FIT_JOBS = Math.max(1, Math.floor((totalmem() / 1048576 - 500) / 450))
+const MAX_JOBS = Math.max(1, Math.min(8, /^\d+$/.test(process.env.MAX_JOBS || '') ? Number(process.env.MAX_JOBS) : FIT_JOBS))
 const ONLY = (process.env.ONLY_ACCOUNTS || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
 if (!CONTROL || !TOKEN) { process.stderr.write('Set CONTROL_URL and RUNNER_TOKEN in runner/.env\n'); process.exit(1) }
 
@@ -301,7 +302,6 @@ class Job {
     return { ok: false, reason: `Unknown op ${s.op}` }
   }
 
-  // Read-only per-task check. Each group (tree, relationships, report) is read once per job and reused.
   async validateTask(s) {
     if (s.evidenceOnly || !s.checks.length) return { ok: true, warn: true, note: `Task ${s.task}: screenshot task, check the evidence image by eye`, readback: 'evidence only' }
     this.checker = this.checker || new Checker(this.page, this.ctx, this.plan.data)
@@ -385,9 +385,9 @@ const valuesOf = (s) => {
 const STARTED = Date.now()
 
 async function main() {
-  log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'}`)
-  const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage', '--disable-gpu', ...(totalmem() < 1.6e9 ? ['--js-flags=--max-old-space-size=384', '--renderer-process-limit=1'] : [])] })
-  // Self-report for the Readiness page: host, versions, local accounts (names only) and SAP reachability.
+  log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'} · ${MAX_JOBS} parallel job(s)`)
+  if (MAX_JOBS > FIT_JOBS) log(`NOTE MAX_JOBS=${MAX_JOBS} but this machine has memory for about ${FIT_JOBS}; SAP tabs may crash`)
+  const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage', '--disable-gpu', ...(totalmem() < 1.6e9 ? ['--js-flags=--max-old-space-size=384', ...(MAX_JOBS === 1 ? ['--renderer-process-limit=1'] : [])] : [])] })
   const hello = async () => {
     let sap = null
     try { const t = Date.now(); const r = await fetch(webgui(SAP_HOST, SAP_CLIENT), { redirect: 'manual', signal: AbortSignal.timeout(15000) }); sap = { ok: r.status < 500, status: r.status, ms: Date.now() - t } } catch (e) { sap = { ok: false, error: e.message } }

@@ -1,5 +1,3 @@
-// Read-only validation from the command line: npm run validate [check ids...]
-// Same checks as the Validate mode on the site. Writes runner/validation/results.json.
 import { chromium } from 'playwright'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { VIEW, login } from './sap.mjs'

@@ -1,5 +1,3 @@
-// Read-only SAP checks. Nothing here types into a saved field or presses Save.
-// Each check id belongs to a group; a group opens its screen once and records every result it can read there.
 import { gotoTxn, selectTreeObject, expandProjectTree, treeRows, clickTitle, cellState, findByLabel, captureDom, openProjectFromWorklist, settle } from './sap.mjs'
 import { costReport } from './recipes.mjs'
 import { PREDECESSORS } from '../../shared/pack.js'
@@ -11,7 +9,6 @@ export class Checker {
 
   rec(id, check, ok, detail) { const r = { id, check, ok: !!ok, detail: String(detail ?? '') }; this.results.push(r); this.say(r); return r }
 
-  // Runs each group the ids need (once per Checker) and returns the results for those ids.
   async run(ids) {
     const groups = [...new Set(ids.map((i) => GROUP[i]).filter(Boolean))]
     for (const g of groups) {

@@ -1,6 +1,3 @@
-// Setup self-check: npm run doctor
-// Verifies .env, the control site, the runner token, SAP reachability and that Chromium launches.
-// Prints PASS/FAIL lines with a fix for each failure and exits non-zero if anything is missing. Does not log in to SAP.
 import { loadEnv, localAccounts } from './env.mjs'
 import { VERSION } from './version.mjs'
 

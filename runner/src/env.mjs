@@ -1,6 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs'
 
-// Loads runner/.env (KEY=value lines) without overriding variables already set, e.g. by systemd.
 export function loadEnv(file = new URL('../.env', import.meta.url)) {
   if (!existsSync(file)) return false
   for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {

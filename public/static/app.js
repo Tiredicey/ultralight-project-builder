@@ -462,7 +462,6 @@ async function viewPlan() {
   $('#planAcc')?.addEventListener('change', (e) => { S.selAccount = e.target.value; viewPlan() })
 }
 
-// ---------- Task sheet: every value per task, how to check it, print to PDF, optional uploaded PDF ----------
 const sheetCache = {}
 async function loadSheet(sap) { return (sheetCache[sap] = sheetCache[sap] || await http(`/me/sheet/${encodeURIComponent(sap)}`)) }
 
@@ -527,7 +526,6 @@ async function viewSheet() {
   if (focus) requestAnimationFrame(() => $(`#task-${focus}`)?.scrollIntoView({ block: 'start' }))
 }
 
-// Reassembles the uploaded PDF from its chunks into a blob URL, cached for the session.
 const pdfUrls = {}
 async function pdfUrl(doc) {
   if (pdfUrls[doc.id]) return pdfUrls[doc.id]
@@ -545,7 +543,6 @@ async function showPdf(doc, page = 1) {
   $('#pdfview').hidden = false
 }
 
-// Canvas side drawer: the sheet entry for the task the run is on.
 async function paintDrawer() {
   const d = $('#drawer')
   if (!d || d.hidden || !S.job) return
@@ -562,7 +559,6 @@ async function paintDrawer() {
   $('#drTask').onchange = run(async (e) => { S.drawerTask = Number(e.target.value); await paintDrawer() })
 }
 
-// ---------- Readiness: is everything set up for a run to succeed? ----------
 async function viewReady() {
   const v = $('#view')
   v.innerHTML = '<p class="muted">Checking</p>'
