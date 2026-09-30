@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
 import { Checker } from './checks.mjs'
 import { loadEnv, localAccounts } from './env.mjs'
@@ -271,7 +271,7 @@ class Job {
     if (s.op === 'popupField') {
       const txt = await waitPopup(p, new RegExp(s.titles.map(escRe).join('|'), 'i'), s.wait || 8000) || await popupText(p)
       if (!txt) return s.optional ? { ok: true, note: 'No popup, value not required' } : { ok: false, reason: 'Popup not shown' }
-      const f = await findByLabel(p, s.titles)
+      const f = await findByLabel(p, s.titles) || (new RegExp(s.titles.map(escRe).join('|'), 'i').test(txt) ? await popupInput(p) : null)
       if (!f) return s.optional ? { ok: true, warn: true, note: `Popup "${txt.slice(0, 60)}" without ${s.titles[0]}` } : { ok: false, reason: `${s.titles[0]} not in popup` }
       await typeInto(p, f, s.value); await p.keyboard.press('Enter'); await settle(p, 1200)
       return this.verify(`${s.titles[0]} = ${s.value}`)

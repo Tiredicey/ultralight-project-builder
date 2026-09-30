@@ -398,3 +398,15 @@ export async function waitPopup(page, re, ms = 8000) {
   while (Date.now() < end) { const t = await popupText(page); if (t && (!re || re.test(t))) return t; await sleep(400) }
   return ''
 }
+
+export async function popupInput(page) {
+  const r = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('[role=dialog], .lsPopupWindow, .urPWFloatLeft')].filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight && el.id !== 'sysInfoAreaMenu' && el.getAttribute('role') !== 'menu' }).pop()
+    if (!p) return null
+    const i = [...p.querySelectorAll('input')].find((x) => { const b = x.getBoundingClientRect(); return b.width > 20 && b.height > 0 && !x.readOnly && x.type !== 'hidden' && x.type !== 'checkbox' && x.getAttribute('aria-readonly') !== 'true' })
+    if (!i) return null
+    const b = i.getBoundingClientRect()
+    return { x: b.left, y: b.top, w: b.width, h: b.height, v: i.value }
+  }).catch(() => null)
+  return r
+}
