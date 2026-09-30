@@ -441,7 +441,8 @@ async function viewExport() {
   const acc = S.accounts.length ? { accounts: S.accounts } : await http('/me/accounts')
   S.accounts = acc.accounts
   if (!S.accounts.length) { v.innerHTML = hero('export', { title: 'Export <span class="grad">submission</span>', text: 'No SAP account has been granted to you yet. Ask the owner to grant a LEARN-### account.' }); return }
-  const sap = S.exportAcc && S.accounts.some((a) => a.sap_user === S.exportAcc) ? S.exportAcc : (S.selAccount || S.accounts[0].sap_user)
+  const lastRun = (S.jobs || []).find((j) => S.accounts.some((a) => a.sap_user === j.sap_user) && j.status === 'done')
+  const sap = S.exportAcc && S.accounts.some((a) => a.sap_user === S.exportAcc) ? S.exportAcc : lastRun?.sap_user || (S.jobs?.length ? null : (await http('/jobs').then((r) => { S.jobs = r.jobs; return r.jobs.find((j) => j.status === 'done' && S.accounts.some((a) => a.sap_user === j.sap_user))?.sap_user }).catch(() => null))) || S.selAccount || S.accounts[0].sap_user
   S.exportAcc = sap
   const sub = await http(`/me/submission/${encodeURIComponent(sap)}`)
   const d = sub.data
