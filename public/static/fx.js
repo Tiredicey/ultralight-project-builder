@@ -80,9 +80,17 @@ let io
 export function reveal(root = document) {
   if (reduced() || !('IntersectionObserver' in window)) return
   const els = root.querySelectorAll('.card:not(.rv), .task:not(.rv), .mode:not(.rv), .gallery figure:not(.rv), .val-cell:not(.rv), .ready-item:not(.rv), .sheet-task:not(.rv)')
-  io = io || new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) } }), { rootMargin: '0px 0px -6% 0px' })
+  io = io || new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) } }), { threshold: 0, rootMargin: '0px 0px 40px 0px' })
   let i = 0
-  els.forEach((el) => { if (el.closest('.drawer, .pdfview, .hero')) return; el.classList.add('rv'); el.style.setProperty('--d', `${Math.min(i++, 14) * 38}ms`); io.observe(el) })
+  const vh = innerHeight
+  els.forEach((el) => {
+    if (el.closest('.drawer, .pdfview, .hero')) return
+    el.classList.add('rv')
+    el.style.setProperty('--d', `${Math.min(i++, 14) * 38}ms`)
+    if (el.getBoundingClientRect().top < vh) requestAnimationFrame(() => el.classList.add('in'))
+    else io.observe(el)
+  })
+  setTimeout(() => root.querySelectorAll('.rv:not(.in)').forEach((el) => { if (el.getBoundingClientRect().top < innerHeight) el.classList.add('in') }), 1500)
 }
 
 export function tilt(root = document) {
