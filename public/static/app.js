@@ -453,9 +453,10 @@ async function viewExport() {
   if (S.exportVar?.acc !== sap) S.exportVar = { acc: sap, k: base }
   const have = FIGURES.filter((f) => (figs[f.name] && !figs[f.name].flag) || S.exportOver.files[f.name]).length
   const verified = Object.values(status).filter((x) => x.state === 'Verified in SAP' || x.state === 'Done by runner').length
+  const eyeball = Object.values(status).filter((x) => x.state === 'Check screenshot').length
   const saved = JSON.parse(localStorage.getItem('uc_export') || '{}')
   v.innerHTML = `
-  ${hero('export', { title: 'Export <span class="grad">submission</span>', text: `Builds the IT2406 Word deliverable for ${esc(sap)} in your browser: the required screenshots with capture timestamps, the task status table, all task data tables and a conclusion written for ${esc(d.project)}. No downloading screenshots one by one.`, meta: `<span class="pill ${have === FIGURES.length ? 'ok' : 'warn'}">${have} of ${FIGURES.length} screenshots</span><span class="pill ${verified === 14 ? 'ok' : 'warn'}">${verified} of 14 tasks recorded</span><span class="pill">${sub.jobs.length} runs</span>`, actions: `<select class="input" id="expAcc" style="max-width:13rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
+  ${hero('export', { title: 'Export <span class="grad">submission</span>', text: `Builds the IT2406 Word deliverable for ${esc(sap)} in your browser: the required screenshots with capture timestamps, the task status table, all task data tables and a conclusion written for ${esc(d.project)}. No downloading screenshots one by one.`, meta: `<span class="pill ${have === FIGURES.length ? 'ok' : 'warn'}">${have} of ${FIGURES.length} screenshots</span><span class="pill ${verified + eyeball === 14 ? 'ok' : 'warn'}">${verified} verified${eyeball ? ` + ${eyeball} screenshot-only` : ''} of 14 tasks</span><span class="pill">${sub.jobs.length} runs</span>`, actions: `<select class="input" id="expAcc" style="max-width:13rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
   <div class="export-grid">
     <div class="stack">
       <section class="card stack">

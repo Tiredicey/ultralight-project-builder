@@ -174,6 +174,39 @@ Tested locally (wrangler + D1):
 On the live site, multi-add, Save limit and the queue warning were checked with curl.
 
 
+## Export submission (2026-09-30)
+
+The **Export submission** page builds the IT2406 Word file in one click. You no longer need to download screenshots one at a time.
+
+- **What goes in the .docx:**
+  - Cover table: student, section, SAP user, system/client, project, supplier, PS text, generation time.
+  - Task summary table: all 14 tasks with status, transaction, timestamp and run number.
+  - The 9 required screenshots, each captioned with its transaction, what it shows, and when and in which run it was captured.
+  - Task data tables: WBS, activities, special activities 0045/0135, 22 relationships, PS text and milestones, postings.
+  - Conclusion: a plan-versus-actual table plus four sentences.
+- **Where it is built:** in the browser (`public/static/docx.js`, a plain OOXML writer with a stored zip, no dependencies). The server only returns the evidence list (`GET /api/me/submission/:sapUser`), so the Worker CPU limit is never hit.
+- **Unsuitable captures are left out:**
+  - A screenshot taken in a run that skipped the task because it was already done.
+  - A cost report whose read-back actual does not match its task (Task 8 should show no actual, Task 12 should show 1,750.00).
+  - A Task 3 graph with more than one earliest-start date (the links already existed).
+
+  Each figure card and the document say why a capture was left out, and **Attach / Replace** puts your own image in its place.
+- **Conclusions** (`public/static/conclusions.js`):
+  - 42 variants per LEARN-###. Each one is built from four sentence pools (plan change, labour actual, invoice, outlook) of 42 sentences each.
+  - All 168 sentences are different, and the four pools are indexed so no two variants share a sentence.
+  - The default variant is a hash of the LEARN number. Over LEARN-100 to LEARN-999, every variant is used 14 to 27 times, so classmates start from different text.
+  - Previous, Next and Shuffle pick another variant.
+  - Project, supplier and LEARN number are filled in for each account.
+- **Test on the live site (2026-09-30, LEARN-653):**
+  - `runner/dev/exportcheck.mjs` clicked Export and got `IT2406_PT1_LEARN-653_P2653.docx` (1.3 MB) with no page errors.
+  - python-docx opened it, and LibreOffice converted it to a 9-page PDF.
+  - Attaching the correct Task 8 and Task 12 images from `docs/evidence` worked.
+- **Not confirmed:**
+  - Opening the file in Microsoft Word itself. It was only checked with python-docx and LibreOffice.
+  - Tasks 3 and 11 for LEARN-653 still have no suitable screenshot on the site:
+    - Task 11: CN25 was never captured by a run that actually posted it.
+    - Task 3: the "before" state no longer exists, because the links are in place.
+
 ## Interface (2026-09-30)
 
 - **Login page:** a 29 s looping background video made from real screenshots of this site and of SAP P/2653, plus a moving strip of 7 real screenshots. The headline types itself out and the three facts count up. The form has a show/hide password button and a loading spinner.

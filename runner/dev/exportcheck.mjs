@@ -14,6 +14,9 @@ await p.screenshot({ path: '/tmp/exp-page.jpg', quality: 82, type: 'jpeg', anima
 const first = await p.textContent('#cvText')
 await p.click('#cvNext'); const second = await p.textContent('#cvText')
 await p.click('#cvBase'); const back = await p.textContent('#cvText')
+for (const pair of (process.env.ATTACH || '').split(',').filter(Boolean)) { const [name, file] = pair.split('='); await p.setInputFiles(`[data-over="${name}"]`, file); await p.waitForSelector(`[data-unover="${name}"]`, { timeout: 30000 }); await p.waitForTimeout(1500) }
+await p.evaluate(() => scrollTo(0, 0)); await p.waitForTimeout(400)
+await p.screenshot({ path: '/tmp/exp-page.jpg', quality: 82, type: 'jpeg', animations: 'disabled', fullPage: true, timeout: 60000 })
 await p.fill('#expName', process.env.NAME || 'Test Student'); await p.fill('#expSec', 'BSIT 3A')
 const [dl] = await Promise.all([p.waitForEvent('download', { timeout: 120000 }), p.click('#expGo')])
 const out = `/tmp/${dl.suggestedFilename()}`
