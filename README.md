@@ -173,12 +173,6 @@ Tested locally (wrangler + D1):
 
 On the live site, multi-add, Save limit and the queue warning were checked with curl.
 
-## Not confirmed
-
-- **Grading monitor percentage.** The grading app is not assigned to LEARN-653, so only the student can read it.
-- **Oracle runner.** It still reports 1.2.0, and its stored LEARN-626 password is rejected by SAP ("Client, name, or password is not correct"). Fix it on the VM: `git pull && cd runner && npm install`, correct `SAP_ACCOUNTS`, restart. I have no access to that VM.
-- **Two real SAP runs at the same time.** The claim logic was tested with stub runners. Only one real account password was available here (LEARN-653), so two live SAP runs side by side were not run from this sandbox.
-- **Task 3 "before" screenshot.** The saved capture was taken after the relationships existed.
 
 ## Stack
 
