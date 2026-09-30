@@ -14,15 +14,17 @@ for (const [tag, opts] of [['d', { viewport: { width: 1440, height: 900 }, color
   p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()) })
   await p.goto(url, { waitUntil: 'load', timeout: 60000 })
   await p.waitForTimeout(2500)
-  const login = await p.evaluate(() => { const v = document.querySelector('.dmz-video video'); return { video: v ? { playing: !v.paused, t: +v.currentTime.toFixed(1), ready: v.readyState } : null, marquee: document.querySelectorAll('.marquee img').length, overflowX: document.documentElement.scrollWidth > innerWidth } })
+  const login = await p.evaluate(() => { const v = document.querySelector('.dmz-video video'); return { video: v ? { playing: !v.paused, t: +v.currentTime.toFixed(1), ready: v.readyState } : null, marquee: document.querySelectorAll('.marquee img').length, overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 || innerWidth > screen.width + 1 } })
   await shot(p, `${out}/${tag}-login.jpg`)
   await p.fill('#email', process.env.EMAIL); await p.fill('#password', process.env.PASS)
   await p.click('button[type=submit]'); await p.waitForTimeout(2500)
   const pages = {}
-  for (const v of tag === 'd' ? views : ['launch', 'plan']) {
+  for (const v of tag === 'd' || tag === 'l' ? views : ['launch', 'plan', 'export', 'admin']) {
     await p.evaluate((h) => { location.hash = h }, v)
-    await p.waitForTimeout(3000); await p.evaluate(() => scrollTo(0, 0)); await p.waitForTimeout(600)
-    pages[v] = await p.evaluate(() => ({ h1: [...document.querySelectorAll('h1')].filter((h) => h.offsetParent).length, title: document.querySelector('.hero-title')?.textContent, word: document.querySelector('.hero-word')?.textContent, hiddenAfter: [...document.querySelectorAll('.rv')].filter((e) => e.getBoundingClientRect().top < innerHeight && getComputedStyle(e).opacity === '0').length, overflowX: document.documentElement.scrollWidth > innerWidth }))
+    await p.waitForTimeout(120)
+    const early = await p.evaluate(() => { const m = document.querySelector('#view'); return m ? m.textContent.trim().length > 0 : false })
+    await p.waitForTimeout(2900); await p.evaluate(() => scrollTo(0, 0)); await p.waitForTimeout(600)
+    pages[v] = await p.evaluate((early) => ({ early, h1: [...document.querySelectorAll('h1')].filter((h) => h.offsetParent).length, title: document.querySelector('.hero-title')?.textContent, word: document.querySelector('.hero-word')?.textContent, hiddenAfter: [...document.querySelectorAll('.rv')].filter((e) => e.getBoundingClientRect().top < innerHeight && getComputedStyle(e).opacity === '0').length, overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 || innerWidth > screen.width + 1 }), early)
     await shot(p, `${out}/${tag}-${v}.jpg`)
   }
   report[tag] = { login, pages, errs }

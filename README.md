@@ -207,14 +207,33 @@ The **Export submission** page builds the IT2406 Word file in one click. You no 
     - Task 11: CN25 was never captured by a run that actually posted it.
     - Task 3: the "before" state no longer exists, because the links are in place.
 
-## Interface (2026-09-30)
+## Interface (2026-09-30, final design pass)
 
-- **Login page:** a 29 s looping background video made from real screenshots of this site and of SAP P/2653, plus a moving strip of 7 real screenshots. The headline types itself out and the three facts count up. The form has a show/hide password button and a loading spinner.
-- **Every signed-in page has its own header:** its own colour set, animated drawing, background screenshot and outline word (Launch, Live, Sheet, Ready, Proof, Model, Setup, Keys). Each menu item uses its page's colour.
-- **Motion:** slow colour-blob background with drifting dots, cards that fade in as you scroll, fades between pages, a pulsing frame on the live canvas, moving lines on the network plan.
-- **Accessibility:** if your system is set to reduce motion, all of this stops, the video is paused and everything shows at once. Printing hides the decoration. There is still one main heading per page.
-- **Checking it:** `runner/dev/sitecheck.mjs` logs in to the live site and checks every page in dark, light, phone (390 px) and reduced-motion mode. On 2026-09-30 it found 0 script errors, no sideways scrolling, and nothing left invisible on screen. The video played, except in reduced-motion mode where it stays paused on purpose.
-- **Media:** `public/static/media/`, about 3 MB. The images are WebP files made from captures in `docs/evidence` and live-site screenshots. There are no stock photos.
+The earlier motion pass gave each of the 9 pages its own colour set, animated drawing and outline word, plus gradient headings, pulsing dots, a particle canvas and card tilt. That broke the one-accent rule in `facts.txt` (sections 21.2, 21.5 and 22.A) and competed with the SAP screenshots for attention. This pass keeps every feature and changes only the look.
+
+- **One accent.** Brass `#7a5c26` light / `#c9a86a` dark on off-black `#15171a` and paper `#f4f2ee`. One corner radius (10 px) everywhere. No gradient text, glow, pulsing dot, particle canvas, tilt or shine.
+- **Page headers.** Kicker, one `<h1>`, one line of text, status pills, actions. A hairline rule separates the header from the content.
+- **Contrast (WCAG 2.x formula).** Before the change, light-mode accent text on the page background was 4.49:1 (fails AA). Now:
+
+  | Pair | Light | Dark |
+  |---|---|---|
+  | Body text / background | 14.78 | 14.16 |
+  | Muted text / card | 5.71 | 6.28 |
+  | Accent / background | 5.55 | 7.95 |
+  | Button text / accent | 5.94 | 7.91 |
+  | Accent / soft-accent tint | 4.92 | 5.60 |
+
+- **Loading and errors.** Every page shows a spinner and a line of text the moment you open it. Before the change, the Owner console stayed blank for the 1.8 s its data took. If a page fails to load, it shows the error and a **Try again** button. An expired session sends you back to sign-in.
+- **Theme.** The theme button says which theme it switches to and is also in the phone top bar (it was desktop-only). `theme-color` meta tags match the page background.
+- **Phone.** The top nav scrolls sideways on its own and keeps the current page in view. Stacked layouts use `minmax(0, 1fr)`: before the change, the Setup guide code blocks and the top bar widened every page to 1,285 px on a 390 px screen.
+- **Login page.** The same brass accent. The background video is dimmed and greyscale. The facts are split by rules instead of glass tiles, and the screenshot strip runs slower and pauses on hover or keyboard focus.
+- **Kept:** view transitions (short fades), reveal on scroll, count-up, typed headline. With reduced motion set, these are off and the video stays paused.
+- **Keyboard:** task and mode tiles show a focus ring. The Attach buttons on Export show a focus ring when their file input has focus.
+- **Checked on 2026-09-30:**
+  - `runner/dev/sitecheck.mjs` ran against wrangler dev in 4 modes: dark and light (all 9 pages each), phone 390 px and reduced motion (4 pages each). Result: 0 script errors, no sideways scrolling, one `<h1>` per page, content visible within 120 ms, nothing left hidden.
+  - The script now reads `clientWidth`. The old `innerWidth` check missed the phone overflow above, because on a mobile viewport `innerWidth` grows with the page.
+  - `scripts/e2e-local.sh` 13/13 and `scripts/e2e-features.sh` 22/22. The runner-version assertion in the second script expected 1.2.0 and failed before this change. It now expects 1.3.0, the version the site reports.
+- **Not confirmed:** Safari and Firefox. Only Chromium (Playwright 1.63) was used.
 
 ## Stack
 

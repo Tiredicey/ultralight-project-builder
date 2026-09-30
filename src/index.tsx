@@ -29,6 +29,8 @@ const shell = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f2ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15171a" media="(prefers-color-scheme: dark)">
 <meta name="robots" content="noindex">
 <title>Ultralight Project Builder, SAP PS and FI canvas</title>
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">

@@ -1,6 +1,6 @@
 import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName } from './submission.js'
 import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
-import { hero, mountBackdrop, setScene, reveal, tilt, typeLine, countUp, transition, media } from './fx.js'
+import { hero, mountBackdrop, reveal, typeLine, countUp, transition, media } from './fx.js'
 const $ = (s, r = document) => r.querySelector(s)
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '')
@@ -38,7 +38,12 @@ function toggleTheme() {
   const next = cur === 'dark' ? 'light' : 'dark'
   document.documentElement.dataset.theme = next
   localStorage.setItem('uc_theme', next)
+  paintThemeBtns()
 }
+const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+function paintThemeBtns() { document.querySelectorAll('[data-theme-btn]').forEach((b) => { const dark = curTheme() === 'dark'; b.textContent = dark ? 'Light theme' : 'Dark theme'; b.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme') }) }
+const stateHtml = (msg) => `<div class="view-state" role="status"><div class="stack"><span class="spinner" aria-hidden="true"></span><p class="muted">${esc(msg)}</p></div></div>`
+const errorHtml = (msg) => `<div class="view-state" role="alert"><div class="stack"><h2>This page did not load</h2><p class="muted">${esc(msg)}</p><button class="btn primary" id="viewRetry">Try again</button></div></div>`
 
 async function boot() {
   S.health = await http('/health').catch(() => ({ initialized: true }))
@@ -54,17 +59,15 @@ function render() {
   mountBackdrop()
   if (!S.user) return renderAuth()
   document.body.classList.remove('dmz')
-  if (S.user.status !== 'approved') { setScene('admin'); return renderPending() }
-  setScene(S.view)
+  if (S.user.status !== 'approved') return renderPending()
   renderShell()
 }
 
 let settleObs
-const settle = () => { const v = $('#view'); if (!v) return; settleObs?.disconnect(); let q = 0; settleObs = new MutationObserver(() => { if (q) return; q = requestAnimationFrame(() => { q = 0; reveal(v); countUp(v); tilt(v) }) }); settleObs.observe(v, { childList: true, subtree: true }); reveal(v) }
+const settle = () => { const v = $('#view'); if (!v) return; settleObs?.disconnect(); let q = 0; settleObs = new MutationObserver(() => { if (q) return; q = requestAnimationFrame(() => { q = 0; reveal(v); countUp(v) }) }); settleObs.observe(v, { childList: true, subtree: true }); reveal(v) }
 
 function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'login') {
   const first = S.health && !S.health.initialized
-  setScene(null)
   document.body.classList.add('dmz')
   const shots = [['sap-network.webp', 'Task 5 network graph, P/2653'], ['sap-costs.webp', 'Task 14 cost report, 11,450.00 actual'], ['shot-canvas.webp', 'Live canvas streaming SAP'], ['sap-wbs.webp', 'Task 1 WBS responsibilities'], ['shot-plan.webp', 'Project data network plan'], ['sap-invoice.webp', 'Task 13 supplier invoice 9,700 EUR'], ['sap-structure.webp', 'Task 9 structure overview']]
   $('#app').innerHTML = `
@@ -76,7 +79,7 @@ function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'log
     <section class="auth-story">
       <div class="brand"><img src="/static/icon.svg" alt="">Ultralight Project Builder</div>
       <div class="dmz-copy">
-        <span class="kicker"><span class="kdot"></span>SAP PS and FI, 14 tasks, one canvas</span>
+        <span class="kicker">SAP PS and FI, 14 tasks, one canvas</span>
         <h1 class="dmz-title">Build the <span class="grad">Ultralight Bike</span> project<span class="typed-line"><span class="typed" id="typed"></span></span></h1>
         <p class="lead">A runner drives SAP WebGUI for you, streams every frame here, reads each result back from SAP, and hands control to you whenever SAP needs a person.</p>
         <div class="auth-facts">
@@ -90,19 +93,19 @@ function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'log
       </div>
     </section>
     <section class="auth-form">
-      <form id="authForm" class="glass" novalidate data-tilt>
+      <form id="authForm" class="glass" novalidate>
         <div class="seg" role="group" aria-label="Choose form">
           <button type="button" data-m="login" aria-pressed="${mode === 'login'}">Sign in</button>
           <button type="button" data-m="register" aria-pressed="${mode === 'register'}">Request access</button>
         </div>
-        <h2>${mode === 'login' ? 'Welcome back' : first ? 'Create the owner account' : 'Request access'}</h2>
+        <h2>${mode === 'login' ? 'Sign in to the canvas' : first ? 'Create the owner account' : 'Request access'}</h2>
         <p class="small muted">${mode === 'login' ? 'Sign in with the email the owner approved.' : first ? 'No accounts exist yet. The first account becomes the owner who approves everyone else.' : 'The owner approves each request and grants a SAP account.'}</p>
         ${mode === 'register' ? '<div class="field"><label for="name">Name</label><input class="input" id="name" name="name" autocomplete="name" required></div>' : ''}
         <div class="field"><label for="email">Email</label><input class="input" id="email" name="email" type="email" autocomplete="email" required></div>
         <div class="field"><label for="password">Password</label><div class="pw"><input class="input" id="password" name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="10" required><button type="button" class="btn sm ghost" id="pwEye" aria-label="Show password" aria-pressed="false">Show</button></div></div>
         ${mode === 'register' && first && S.health.setupKeyRequired ? '<div class="field"><label for="setupKey">Setup key</label><input class="input" id="setupKey" name="setupKey" type="password" required></div>' : ''}
         ${mode === 'register' && !first ? '<div class="field"><label for="note">Why you need access (optional)</label><input class="input" id="note" name="note" placeholder="Section, SAP user LEARN-###"></div>' : ''}
-        <button class="btn primary big" type="submit"><span>${mode === 'login' ? 'Sign in' : first ? 'Create owner' : 'Send request'}</span><i class="shine" aria-hidden="true"></i></button>
+        <button class="btn primary big" type="submit"><span>${mode === 'login' ? 'Sign in' : first ? 'Create owner' : 'Send request'}</span></button>
         <p class="small muted dmz-foot">SAP M53 · client 236 · the owner approves every account</p>
       </form>
     </section>
@@ -111,7 +114,6 @@ function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'log
   $('#pwEye').onclick = (e) => { const i = $('#password'); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; e.target.textContent = show ? 'Hide' : 'Show'; e.target.setAttribute('aria-pressed', String(show)) }
   typeLine($('#typed'), ['on autopilot.', 'with you in the loop.', 'for any LEARN-###.', 'verified in SAP.'])
   countUp($('.auth-facts'))
-  tilt($('#app'))
   const vid = $('.dmz-video video')
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { vid.removeAttribute('autoplay'); vid.pause() }
   $('#authForm').addEventListener('submit', run(async (e) => {
@@ -160,20 +162,31 @@ function renderShell() {
       <div class="brand"><img src="/static/icon.svg" alt="">Ultralight Builder</div>
       ${navHtml()}
       <div class="side-foot">
-        <div class="muted">${esc(S.user.name)} <span class="pill">${esc(S.user.role)}</span></div>
-        <div class="row"><button class="btn sm" id="theme">Theme</button><button class="btn sm ghost" id="logout">Sign out</button></div>
+        <div class="side-user muted"><span title="${esc(S.user.email)}">${esc(S.user.name)}</span><span class="pill">${esc(S.user.role)}</span></div>
+        <div class="row"><button class="btn sm" data-theme-btn></button><button class="btn sm ghost" id="logout">Sign out</button></div>
       </div>
     </aside>
-    <header class="topbar"><div class="brand"><img src="/static/icon.svg" alt=""></div>${navHtml()}<button class="btn sm ghost" id="logout2">Sign out</button></header>
+    <header class="topbar"><div class="brand"><img src="/static/icon.svg" alt=""></div>${navHtml()}<div class="topbar-actions"><button class="btn sm ghost" data-theme-btn></button><button class="btn sm ghost" id="logout2">Sign out</button></div></header>
     <main class="main" id="view"></main>
   </div>`
   document.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => go(b.dataset.v)))
-  $('#theme').onclick = toggleTheme
+  document.querySelectorAll('[data-theme-btn]').forEach((b) => { b.onclick = toggleTheme })
+  paintThemeBtns()
+  const cur = $('.topbar [aria-current="page"]'); if (cur) cur.parentElement.scrollLeft = cur.offsetLeft - 8
   $('#logout').onclick = logout
   $('#logout2').onclick = logout
   const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin, export: viewExport }
+  if (!views[S.view] || (S.view === 'admin' && S.user.role === 'user')) S.view = 'launch'
   scrollTo({ top: 0 })
-  ;(views[S.view] || viewLaunch)()
+  const v = $('#view')
+  v.innerHTML = stateHtml('Loading')
+  const view = S.view
+  Promise.resolve().then(views[view]).catch((e) => {
+    if (S.view !== view || !v.isConnected) return
+    if (e.status === 401) { S.user = null; return render() }
+    v.innerHTML = errorHtml(e.message)
+    $('#viewRetry').onclick = () => transition(render)
+  })
   settle()
 }
 
@@ -187,7 +200,7 @@ function go(view, arg) {
 
 async function viewLaunch() {
   const v = $('#view')
-  v.innerHTML = '<p class="muted">Loading pack</p>'
+  v.innerHTML = stateHtml('Loading the task pack')
   const [pack, acc] = await Promise.all([S.pack || http('/pack'), http('/me/accounts')])
   S.pack = pack; S.accounts = acc.accounts; S.runnersOnline = acc.runnersOnline
   if (!S.selAccount && S.accounts[0]) S.selAccount = S.accounts[0].sap_user
@@ -437,7 +450,7 @@ async function viewJobs() {
 
 async function viewExport() {
   const v = $('#view')
-  v.innerHTML = '<p class="muted">Collecting evidence</p>'
+  v.innerHTML = stateHtml('Collecting evidence from your runs')
   const acc = S.accounts.length ? { accounts: S.accounts } : await http('/me/accounts')
   S.accounts = acc.accounts
   if (!S.accounts.length) { v.innerHTML = hero('export', { title: 'Export <span class="grad">submission</span>', text: 'No SAP account has been granted to you yet. Ask the owner to grant a LEARN-### account.' }); return }
@@ -478,7 +491,7 @@ async function viewExport() {
         <h2>Cover page</h2>
         <div class="field"><label for="expName">Student name</label><input class="input" id="expName" value="${esc(saved.name ?? sub.user.name ?? '')}" autocomplete="name"></div>
         <div class="field"><label for="expSec">Section</label><input class="input" id="expSec" value="${esc(saved.section || '')}" placeholder="e.g. BSIT 3A"></div>
-        <button class="btn primary huge" id="expGo"><span>Export Submission Package (.docx)</span><i class="shine" aria-hidden="true"></i></button>
+        <button class="btn primary huge" id="expGo"><span>Export Submission Package (.docx)</span></button>
         <p class="small muted" id="expProg" aria-live="polite">One file: ${esc(fileName(d))}</p>
       </section>
       <section class="card stack concl">
@@ -595,7 +608,7 @@ const valPill = (v) => !v ? '<span class="pill">not checked</span>' : v.level ==
 
 async function viewSheet() {
   const v = $('#view')
-  v.innerHTML = '<p class="muted">Loading task sheet</p>'
+  v.innerHTML = stateHtml('Loading the task sheet')
   if (!S.accounts.length) { const acc = await http('/me/accounts'); S.accounts = acc.accounts }
   const sap = S.selAccount || S.accounts[0]?.sap_user || 'LEARN-000'
   const [sheet, docs, ready] = await Promise.all([loadSheet(sap), http('/me/docs'), http('/me/readiness').catch(() => null)])
@@ -667,7 +680,7 @@ async function paintDrawer() {
 
 async function viewReady() {
   const v = $('#view')
-  v.innerHTML = '<p class="muted">Checking</p>'
+  v.innerHTML = stateHtml('Checking runners and accounts')
   const [r, pack] = await Promise.all([http('/me/readiness'), S.pack || http('/pack').catch(() => null)])
   S.pack = pack
   const onlineRunners = r.runners.filter((x) => x.online)
