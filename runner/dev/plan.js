@@ -22,7 +22,7 @@ for (const s of plan.steps) {
     else if (s.op === 'expectField') { const f = await sap.findByLabel(page, s.titles); r = { ok: !!f && String(f.v).includes(s.contains), note: f?.v } }
     else if (s.op === 'popupField') { const t = await sap.popupText(page); if (t) { const f = await sap.findByLabel(page, s.titles); if (f) { await sap.typeInto(page, f, s.value); await page.keyboard.press('Enter'); await sap.settle(page, 2000) } } r = { ok: true, note: t ? 'popup filled' : 'no popup' } }
     else if (s.op === 'fill') { for (const [labels, v] of s.fields) { const f = await sap.findByLabel(page, labels); if (!f) { r = { ok: false, reason: `field ${labels[0]}` }; break } await sap.typeInto(page, f, v); await page.keyboard.press('Tab') } r = r || { ok: true } }
-    else if (s.op === 'key') { await page.keyboard.press(s.key); await sap.settle(page, 2500); r = { ok: true, note: await sap.statusbar(page) } }
+    else if (s.op === 'key') { await page.keyboard.press(s.press); await sap.settle(page, 2500); r = { ok: true, note: await sap.statusbar(page) } }
     else if (s.op === 'shot') r = { ok: true, note: 'shot' }
     else r = { ok: false, reason: `op ${s.op} not simulated` }
   } catch (e) { r = { ok: false, reason: e.message } }

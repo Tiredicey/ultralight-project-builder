@@ -144,9 +144,7 @@ export const TASKS = [
     id: 7, title: 'Release project', role: 'Production Manager', area: 'PS', txn: 'CJ20N', shot: false,
     steps: (d) => [
       S({ op: 'openProject', project: d.project, label: `Open ${d.project}` }),
-      S({ op: 'recipe', name: 'treeSelect', args: { ident: d.project, level: 0 }, label: `Select project definition ${d.project}` }),
-      S({ op: 'menu', path: ['Edit', 'Status', 'Release'], label: 'Edit > Status > Release' }),
-      S({ op: 'expect', statusbar: 'status|set|released', label: 'Status message' }),
+      S({ op: 'recipe', name: 'releaseProject', args: { project: d.project }, label: 'Edit > Status > Release on the project definition' }),
       S({ op: 'save', label: 'Save', expect: 'saved|being changed|changed' }),
       S({ op: 'openProject', project: d.project, label: 'Reopen to verify status' }),
       S({ op: 'expectField', titles: ['System Status'], contains: 'REL', label: 'System status contains REL' })
@@ -167,7 +165,7 @@ export const TASKS = [
       S({ op: 'txn', code: 'CN41N', label: 'Structure Overview' }),
       S({ op: 'popupField', titles: ['PS info profile', 'PS Info Profile'], value: 'GL01000', optional: true, label: 'PS info profile GL01000' }),
       S({ op: 'fill', fields: [[['Project definition', 'Project'], d.project]], label: 'Selection' }),
-      S({ op: 'key', key: 'F8', label: 'Execute' }),
+      S({ op: 'key', press: 'F8', label: 'Execute' }),
       S({ op: 'shot', name: 't9-structure', caption: `Task 9: Structure overview of ${d.project}` })
     ]
   },
@@ -195,7 +193,7 @@ export const TASKS = [
     steps: (d) => [
       S({ op: 'txn', code: 'S_ALR_87013542', label: 'Cost report' }),
       S({ op: 'popupField', titles: ['Database Profile', 'Database prof'], value: 'GL01000', optional: true, label: 'Database profile' }),
-      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, expectActual: 1750 }, label: 'Execute, expect actual 1,750.00 EUR' }),
+      S({ op: 'recipe', name: 'costReport', args: { project: d.project, coArea: d.controllingArea, costElement: '8000000', expectActual: 1750 }, label: 'Execute, expect actual 1,750.00 EUR on 8000000 Labor' }),
       S({ op: 'shot', name: 't12-costs-after-confirmation', caption: 'Task 12: Actual costs 1,750.00 EUR after confirmation' })
     ]
   },

@@ -213,7 +213,11 @@ export async function costReport(ctx, s) {
   if (!t) { const sb = await statusbar(p); return { ok: false, reason: `Cost report not shown: ${sb || 'no totals line'}` } }
   const fmt = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const line = `Actual ${fmt(t.actual)} / Commitment ${fmt(t.commitment)} / Total ${fmt(t.total)} / Plan ${fmt(t.plan)}`
-  if (s.expectActual != null && Math.abs(t.actual - Number(s.expectActual)) > 0.005) return { ok: false, reason: `Expected actual ${fmt(Number(s.expectActual))}, report shows ${line}` }
+  if (s.expectActual != null) {
+    const row = s.costElement ? m[s.costElement] : t
+    const got = row?.actual || 0
+    if (Math.abs(got - Number(s.expectActual)) > 0.005) return { ok: false, reason: `Expected actual ${fmt(Number(s.expectActual))} on ${s.costElement || 'all cost elements'}, report shows ${fmt(got)}. ${line}` }
+  }
   return { ok: true, note: `Report totals ${line}`, readback: line, report: m }
 }
 
@@ -461,6 +465,22 @@ export async function guardPosted(ctx, s) {
   return { ok: true, note: `${s.costElement} actual ${v.toFixed(2)}, ${s.what} still to post${r.ok ? '' : ` (${r.reason})`}` }
 }
 
+export async function releaseProject(ctx, s) {
+  const p = ctx.page
+  const t = await selectTreeObject(p, { ident: s.project, level: 0 })
+  if (!t.ok) return t
+  const st = await findByLabel(p, ['System Status'])
+  if (/\bREL\b/.test(st?.v || '')) return { ok: true, note: `${s.project} already released (${st.v})`, skipTask: true }
+  const { clickMenu } = await import('./sap.mjs')
+  const m = await clickMenu(p, ['Edit', 'Status', 'Release'])
+  if (!m.ok) return m
+  for (let k = 0; k < 3 && (await popupText(p)); k++) await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i])
+  const sb = await statusbar(p)
+  if (!/status was set|released/i.test(sb)) return { ok: false, reason: `Release not confirmed: "${sb}"` }
+  ctx.dirty = true
+  return { ok: true, note: sb }
+}
+
 export async function saveProject(ctx, s) {
   const p = ctx.page
   if (!ctx.dirty && ctx.vars.existing) return { ok: true, note: `Nothing entered for ${ctx.vars.existing}, save skipped` }
@@ -474,4 +494,4 @@ export async function saveProject(ctx, s) {
   return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
 }
 
-export const RECIPES = { guardPosted, activities, primaryCost, wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }
+export const RECIPES = { releaseProject, guardPosted, activities, primaryCost, wbsElements, createProject, supplierInvoice, networkGraph, treeSelect, relationsPred, psText, milestone, activityFields, confirmActivity, confirmSave, costReport, extService, saveProject }

@@ -216,7 +216,7 @@ class Job {
     if (s.op !== 'shot') this.rctx.vars.fastShot = false
     if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); return r.ok ? { ok: true, note: `${s.code} open`, statusbar: r.statusbar } : r }
     if (s.op === 'dismiss') { const r = await handlePopups(p, (s.buttons || []).map((b) => new RegExp(`^${b}$`, 'i'))); return { ok: true, note: r ? `Popup handled: ${r.clicked || 'left open'}` : 'No popup' } }
-    if (s.op === 'key') { await p.keyboard.press(s.key); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.key} pressed`) }
+    if (s.op === 'key') { await p.keyboard.press(s.press); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.press} pressed`) }
     if (s.op === 'tab') { const t = await clickTab(p, s.names); if (!t) return s.optional ? { ok: true, note: 'Tab not present, continuing' } : { ok: false, reason: `Tab ${s.names.join(' / ')} not found` }; return { ok: true, note: `Tab ${t.t}` } }
     if (s.op === 'shot') { await settle(p, 500); await this.evidence(s.name, s.caption, s.task); return { ok: true, note: `Screenshot ${s.name}` } }
     if (s.op === 'save') return saveProject(this.rctx, s)
