@@ -22,9 +22,11 @@ const money = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 
 export function pickFigures(sub) {
   const out = {}
   for (const f of FIGURES) {
-    const all = sub.evidence.filter((x) => x.name === f.name)
-    const e = f.prefer === 'first' ? all[all.length - 1] : all[0]
+    const all = sub.evidence.filter((x) => x.name === f.name && x.flag !== 'skipped')
+    const ordered = f.prefer === 'first' ? [...all].reverse() : all
+    const e = ordered.find((x) => !x.flag) || ordered[0]
     out[f.name] = e ? { ...e, url: `/api/jobs/${e.job_id}/evidence/${e.id}` } : null
+    if (!e) { const bad = sub.evidence.find((x) => x.name === f.name); if (bad) out[f.name] = null, out[`${f.name}:why`] = bad.flagNote }
   }
   return out
 }
@@ -93,13 +95,14 @@ export async function buildSubmission(sub, opts = {}, onProgress = () => {}) {
     const override = opts.overrides?.[f.name]
     const ev = figs[f.name]
     doc.h(`Task ${f.task}: ${f.title}`, 2)
-    if (!override && !ev) { doc.p(`Screenshot not captured yet. Run Task ${f.task} in Autopilot or Assist, or attach your own image before exporting.`, { b: true, color: '9B3434' }); continue }
+    if (!override && !ev) { doc.p(figs[`${f.name}:why`] ? `Screenshot not available: ${figs[`${f.name}:why`]}. Attach your own image before exporting.` : `Screenshot not captured yet. Run Task ${f.task} in Autopilot or Assist, or attach your own image before exporting.`, { b: true, color: '9B3434' }); continue }
     try {
       const img = await imageBytes(override || ev.url)
       doc.image(img.bytes, 'jpeg', img.w, img.h)
       n++
       const when = override ? `attached by you, ${stamp(override.lastModified)}` : `captured ${stamp(ev.created_at)}, run #${ev.job_id}`
       doc.p(`Figure ${n}. ${f.tcode}. ${f.what(d)}. (${when})`, { style: 'Caption' })
+      if (!override && ev.flag) doc.p(`Note: ${ev.flagNote}.`, { i: true, size: 18, color: '8A5A14', center: true })
     } catch (e) { doc.p(`Screenshot could not be loaded: ${e.message}`, { b: true, color: '9B3434' }) }
   }
 

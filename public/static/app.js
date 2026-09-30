@@ -451,7 +451,7 @@ async function viewExport() {
   const status = taskStatus(sub)
   const base = conclusionIndex(d.suffix)
   if (S.exportVar?.acc !== sap) S.exportVar = { acc: sap, k: base }
-  const have = FIGURES.filter((f) => figs[f.name] || S.exportOver.files[f.name]).length
+  const have = FIGURES.filter((f) => (figs[f.name] && !figs[f.name].flag) || S.exportOver.files[f.name]).length
   const verified = Object.values(status).filter((x) => x.state === 'Verified in SAP' || x.state === 'Done by runner').length
   const saved = JSON.parse(localStorage.getItem('uc_export') || '{}')
   v.innerHTML = `
@@ -462,9 +462,9 @@ async function viewExport() {
         <div class="row" style="justify-content:space-between"><h2>Required screenshots</h2><span class="small muted">Newest capture per figure across your runs; the two "before" figures (Tasks 3 and 8) use the earliest. Replace any with your own image.</span></div>
         <div class="meter" aria-label="Screenshots ready"><i style="width:${Math.round(have / FIGURES.length * 100)}%"></i></div>
         <div class="figs">${FIGURES.map((f) => { const own = S.exportOver.files[f.name]; const e = figs[f.name]; const src = own ? URL.createObjectURL(own) : e ? e.url : ''; return `<figure class="fig ${src ? 'ok' : 'miss'}">
-          <span class="badge pill ${own ? 'accent' : e ? 'ok' : 'warn'}">${own ? 'your image' : e ? 'captured' : 'missing'}</span>
+          <span class="badge pill ${own ? 'accent' : e?.flag ? 'warn' : e ? 'ok' : 'warn'}">${own ? 'your image' : e?.flag ? 'check' : e ? 'captured' : 'missing'}</span>
           <div class="thumb">${src ? `<img src="${src}" alt="${esc(f.title)}" loading="lazy">` : `<span class="small muted">Task ${f.task} not captured</span>`}</div>
-          <figcaption><b>Task ${f.task}. ${esc(f.title)}</b><span class="muted">${esc(f.tcode)} · ${own ? esc(own.name) : e ? `run #${e.job_id} · ${esc(fmtTime(e.created_at))}` : 'run this task or attach an image'}</span>
+          <figcaption><b>Task ${f.task}. ${esc(f.title)}</b><span class="muted">${esc(f.tcode)} · ${own ? esc(own.name) : e ? `run #${e.job_id} · ${esc(fmtTime(e.created_at))}` : 'run this task or attach an image'}</span>${!own && e?.flag ? `<span class="small" style="color:var(--warn)">${esc(e.flagNote)}</span>` : ''}${!own && !e && figs[`${f.name}:why`] ? `<span class="small" style="color:var(--warn)">${esc(figs[`${f.name}:why`])}</span>` : ''}
           <div class="row"><label class="btn sm">${src ? 'Replace' : 'Attach'}<input type="file" accept="image/*" data-over="${f.name}"></label>${own ? `<button class="btn sm ghost" data-unover="${f.name}">Use capture</button>` : ''}</div></figcaption></figure>` }).join('')}</div>
       </section>
       <section class="card scroll"><h2>Task status in the document</h2>
