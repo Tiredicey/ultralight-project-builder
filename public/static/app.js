@@ -196,7 +196,7 @@ async function viewLaunch() {
     sync()
     if (!S.selTasks.size) throw new Error('Pick at least one task')
     const r = await http('/jobs', { method: 'POST', body: { sapUser: S.selAccount, tasks: [...S.selTasks].sort((a, b) => a - b), mode: S.mode, password: $('#pw').value || undefined } }).catch((err) => { if (err.data?.jobId) { go('canvas', err.data.jobId); return null } throw err })
-    if (r) { toast(`Run #${r.id} queued`); go('canvas', r.id) }
+    if (r) { toast(r.warning || `Run #${r.id} queued`, !!r.warning); go('canvas', r.id) }
   }))
 }
 

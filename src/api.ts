@@ -258,8 +258,21 @@ api.post('/jobs', async (c) => {
     .bind(u.id, acc.id, sapUser, JSON.stringify(tasks.length ? tasks : plan.steps.map((s: any) => s.task).filter((v: number, i: number, a: number[]) => a.indexOf(v) === i)), mode, 'queued', plan.steps.length, secret, now()).run()
   const id = Number(r.meta.last_row_id)
   await event(c, id, 'info', `Queued ${plan.steps.length} steps for ${sapUser} (${plan.data.project}) in ${mode} mode`)
+  const fleet = (await c.env.DB.prepare('SELECT r.accounts, r.last_seen, i.info FROM runners r LEFT JOIN runner_info i ON i.runner_id = r.id WHERE r.revoked = 0').all<any>()).results
+  const able = fleet.filter((r) => {
+    const lim = j<string[]>(r.accounts, [])
+    const info = j<any>(r.info, {}) || {}
+    const only = Array.isArray(info.only) ? info.only : []
+    const pw = !!secret || (info.accountsWithPassword || []).includes(sapUser)
+    return (!lim.length || lim.includes(sapUser)) && (!only.length || only.includes(sapUser)) && pw
+  })
+  const online = able.filter((r) => r.last_seen && now() - r.last_seen < 30000)
+  const warning = !able.length
+    ? `No runner can take ${sapUser}: every runner is limited to other accounts or holds no password for it. Enter the SAP password here, or add ${sapUser} to a runner's SAP_ACCOUNTS / limit.`
+    : !online.length ? `A runner can take ${sapUser} but none is online right now. The job waits in the queue until one connects.` : null
+  if (warning) await event(c, id, 'warn', warning)
   await audit(c, u.id, 'job.create', { id, sapUser, tasks, mode })
-  return c.json({ id })
+  return c.json({ id, warning })
 })
 
 api.get('/jobs/:id', async (c) => {
