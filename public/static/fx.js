@@ -9,6 +9,7 @@ export const THEMES = {
   jobs: { hue: ['#8e2de2', '#4a00e0', '#ff6ec4'], title: 'Proof', kicker: 'Runs and evidence', shape: 'film', img: 'sap-costs.webp', line: 'Screenshots and read-backs from every run.' },
   plan: { hue: ['#fc466b', '#3f5efb', '#00c9ff'], title: 'Model', kicker: 'Project data', shape: 'graph', img: 'sap-network.webp', line: 'The network, WBS and costs the pack types in.' },
   guide: { hue: ['#43cea2', '#185a9d', '#f8ff00'], title: 'Setup', kicker: 'Setup guide', shape: 'steps', img: 'shot-guide.webp', line: 'Site, runner, approvals. Three pieces, done once.' },
+  export: { hue: ['#2af598', '#009efd', '#b721ff'], title: 'Submit', kicker: 'Submission package', shape: 'doc', img: 'sap-structure.webp', line: 'Screenshots, timestamps, task tables and a conclusion in one Word file.' },
   admin: { hue: ['#ee0979', '#ff6a00', '#ffd452'], title: 'Keys', kicker: 'Owner console', shape: 'shield', img: 'sap-invoice.webp', line: 'Who gets in, which accounts, which runners.' }
 }
 
@@ -22,6 +23,7 @@ const svgShape = (shape, [a, b, c]) => {
     film: [0, 1, 2].map((i) => `<rect x="${24 + i * 54}" y="60" width="46" height="72" rx="6" fill="url(#hg)" opacity="${.5 + i * .2}" class="fx-float" style="animation-delay:${i * .5}s"/>`).join('') + '<rect x="18" y="50" width="164" height="92" rx="10" class="fx-ring"/>',
     graph: (() => { const n = [[30, 100], [80, 55], [80, 145], [130, 100], [175, 100]]; const e = [[0, 1], [0, 2], [1, 3], [2, 3], [3, 4]]; return e.map(([x, y]) => `<line x1="${n[x][0]}" y1="${n[x][1]}" x2="${n[y][0]}" y2="${n[y][1]}" class="fx-edge"/>`).join('') + n.map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="11" fill="url(#hg)" class="fx-beat" style="animation-delay:${i * .3}s"/>`).join('') })(),
     steps: [0, 1, 2].map((i) => `<rect x="${30 + i * 50}" y="${130 - i * 34}" width="44" height="${34 + i * 34}" rx="6" fill="url(#hg)" opacity="${.55 + i * .2}" class="fx-rise" style="animation-delay:${i * .3}s"/>`).join('') + '<circle cx="175" cy="50" r="8" fill="#fff" class="fx-beat"/>',
+    doc: `<rect x="52" y="26" width="96" height="128" rx="10" fill="url(#hg)" class="fx-float"/>${[0, 1, 2, 3].map((i) => `<rect x="66" y="${50 + i * 18}" width="${68 - (i % 2) * 20}" height="7" rx="3.5" fill="#fff" opacity=".85" class="fx-grow" style="animation-delay:${i * .3}s"/>`).join('')}<path d="M100 150v28M86 166l14 14 14-14" stroke="${c}" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round" class="fx-drop"/>`,
     shield: `<path d="M100 30l58 22v44c0 38-26 64-58 76-32-12-58-38-58-76V52z" fill="url(#hg)" class="fx-beat"/><circle cx="100" cy="94" r="14" fill="#fff" opacity=".9"/><rect x="95" y="100" width="10" height="26" rx="4" fill="#fff" opacity=".9"/><path d="M100 30l58 22v44c0 38-26 64-58 76-32-12-58-38-58-76V52z" class="fx-wave"/>`
   }
   return `<svg viewBox="0 0 200 200" aria-hidden="true" class="fx-art">${g}${s[shape] || s.orbit}</svg>`

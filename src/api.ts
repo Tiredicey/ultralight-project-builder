@@ -218,6 +218,25 @@ api.get('/me/readiness', async (c) => {
   return c.json({ latest: RUNNER_LATEST, runners: priv ? runners : runners.map(({ info, ...r }) => ({ ...r, info: info ? { version: info.version, sap: info.sap, sapHost: info.sapHost } : null })), accounts: out, sap: { host: SAP_HOST, client: SAP_CLIENT } })
 })
 
+api.get('/me/submission/:sapUser', async (c) => {
+  const u = c.get('user')
+  const sapUser = c.req.param('sapUser').toUpperCase()
+  const sfx = suffixOf(sapUser)
+  if (!sfx) return c.json({ error: 'SAP user must look like LEARN-###' }, 400)
+  const priv = u.role === 'owner' || u.role === 'admin'
+  if (!priv) {
+    const g = await c.env.DB.prepare('SELECT 1 FROM grants g JOIN sap_accounts a ON a.id = g.account_id WHERE g.user_id = ? AND a.sap_user = ?').bind(u.id, sapUser).first()
+    if (!g) return c.json({ error: 'The owner has not granted you this SAP account' }, 403)
+  }
+  const jobs = (await (priv
+    ? c.env.DB.prepare('SELECT id, mode, status, tasks, created_at, finished_at, result FROM jobs WHERE sap_user = ? ORDER BY id DESC LIMIT 60').bind(sapUser)
+    : c.env.DB.prepare('SELECT id, mode, status, tasks, created_at, finished_at, result FROM jobs WHERE sap_user = ? AND user_id = ? ORDER BY id DESC LIMIT 60').bind(sapUser, u.id)).all<any>()).results
+  const ids = jobs.map((x) => x.id)
+  const evidence = ids.length ? (await c.env.DB.prepare(`SELECT id, job_id, task, name, caption, mime, created_at FROM evidence WHERE kind = 'screenshot' AND job_id IN (${ids.map(() => '?').join(',')}) ORDER BY id DESC`).bind(...ids).all<any>()).results : []
+  const checks = ids.length ? (await c.env.DB.prepare(`SELECT job_id, step_key, level, message, created_at FROM events WHERE job_id IN (${ids.map(() => '?').join(',')}) AND step_key IS NOT NULL AND level IN ('ok', 'warn', 'error') ORDER BY id DESC LIMIT 2000`).bind(...ids).all<any>()).results : []
+  return c.json({ sapUser, data: dataFor(sfx), sap: { host: SAP_HOST, client: SAP_CLIENT }, jobs: jobs.map((x) => ({ ...x, tasks: j(x.tasks, []), result: j(x.result, null) })), evidence, checks, generatedAt: now(), user: { name: u.name, email: u.email } })
+})
+
 api.get('/me/docs', async (c) => c.json({ docs: (await c.env.DB.prepare('SELECT id, name, size, chunks, task_pages, created_at FROM docs WHERE complete = 1 ORDER BY id DESC').all<any>()).results.map((d) => ({ ...d, task_pages: j(d.task_pages, {}) })) }))
 
 api.get('/me/docs/:id/:idx', async (c) => {

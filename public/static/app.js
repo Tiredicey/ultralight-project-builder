@@ -1,3 +1,5 @@
+import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName } from './submission.js'
+import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
 import { hero, mountBackdrop, setScene, reveal, tilt, typeLine, countUp, transition, media } from './fx.js'
 const $ = (s, r = document) => r.querySelector(s)
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -144,7 +146,7 @@ function renderPending() {
 
 const logout = run(async () => { await http('/auth/logout', { method: 'POST' }); S.user = null; render() })
 
-const NAV = [['launch', 'Run pack'], ['canvas', 'Live canvas'], ['sheet', 'Task sheet'], ['ready', 'Readiness'], ['jobs', 'Runs and evidence'], ['plan', 'Project data'], ['guide', 'Setup guide']]
+const NAV = [['launch', 'Run pack'], ['canvas', 'Live canvas'], ['sheet', 'Task sheet'], ['ready', 'Readiness'], ['jobs', 'Runs and evidence'], ['plan', 'Project data'], ['export', 'Export submission'], ['guide', 'Setup guide']]
 
 function navHtml() {
   const items = [...NAV, ...(S.user.role === 'owner' || S.user.role === 'admin' ? [['admin', 'Owner console']] : [])]
@@ -169,7 +171,7 @@ function renderShell() {
   $('#theme').onclick = toggleTheme
   $('#logout').onclick = logout
   $('#logout2').onclick = logout
-  const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin }
+  const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin, export: viewExport }
   scrollTo({ top: 0 })
   ;(views[S.view] || viewLaunch)()
   settle()
@@ -413,7 +415,7 @@ async function viewJobs() {
   let detail = null
   if (focus) detail = await http(`/jobs/${focus}`).catch(() => null)
   v.innerHTML = `
-  ${hero('jobs', { title: 'Runs and <span class="grad">evidence</span>', text: 'Every screenshot and DOM capture a run produced, labelled by task and transaction. Download them for the Word deliverable.', actions: S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : '' })}
+  ${hero('jobs', { title: 'Runs and <span class="grad">evidence</span>', text: 'Every screenshot and DOM capture a run produced, labelled by task and transaction. Use <b>Export submission</b> to put them into a finished Word file in one click.', actions: S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : '' })}
   <div class="grid3">
     <section class="card scroll" style="grid-column:span 1">
       <table class="t"><thead><tr><th>#</th><th>Account</th><th>Status</th><th>When</th></tr></thead><tbody>
@@ -431,6 +433,81 @@ async function viewJobs() {
   document.querySelectorAll('[data-j]').forEach((b) => b.addEventListener('click', () => { history.replaceState(null, '', `#jobs/${b.dataset.j}`); viewJobs() }))
   $('#allJobs')?.addEventListener('change', (e) => { S.jobsAll = e.target.checked; viewJobs() })
   $('#openCanvas')?.addEventListener('click', () => go('canvas', detail.job.id))
+}
+
+async function viewExport() {
+  const v = $('#view')
+  v.innerHTML = '<p class="muted">Collecting evidence</p>'
+  const acc = S.accounts.length ? { accounts: S.accounts } : await http('/me/accounts')
+  S.accounts = acc.accounts
+  if (!S.accounts.length) { v.innerHTML = hero('export', { title: 'Export <span class="grad">submission</span>', text: 'No SAP account has been granted to you yet. Ask the owner to grant a LEARN-### account.' }); return }
+  const sap = S.exportAcc && S.accounts.some((a) => a.sap_user === S.exportAcc) ? S.exportAcc : (S.selAccount || S.accounts[0].sap_user)
+  S.exportAcc = sap
+  const sub = await http(`/me/submission/${encodeURIComponent(sap)}`)
+  const d = sub.data
+  S.exportOver = S.exportOver?.acc === sap ? S.exportOver : { acc: sap, files: {} }
+  const figs = pickFigures(sub)
+  const status = taskStatus(sub)
+  const base = conclusionIndex(d.suffix)
+  if (S.exportVar?.acc !== sap) S.exportVar = { acc: sap, k: base }
+  const have = FIGURES.filter((f) => figs[f.name] || S.exportOver.files[f.name]).length
+  const verified = Object.values(status).filter((x) => x.state === 'Verified in SAP' || x.state === 'Done by runner').length
+  const saved = JSON.parse(localStorage.getItem('uc_export') || '{}')
+  v.innerHTML = `
+  ${hero('export', { title: 'Export <span class="grad">submission</span>', text: `Builds the IT2406 Word deliverable for ${esc(sap)} in your browser: the required screenshots with capture timestamps, the task status table, all task data tables and a conclusion written for ${esc(d.project)}. No downloading screenshots one by one.`, meta: `<span class="pill ${have === FIGURES.length ? 'ok' : 'warn'}">${have} of ${FIGURES.length} screenshots</span><span class="pill ${verified === 14 ? 'ok' : 'warn'}">${verified} of 14 tasks recorded</span><span class="pill">${sub.jobs.length} runs</span>`, actions: `<select class="input" id="expAcc" style="max-width:13rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
+  <div class="export-grid">
+    <div class="stack">
+      <section class="card stack">
+        <div class="row" style="justify-content:space-between"><h2>Required screenshots</h2><span class="small muted">Newest capture per figure across your runs. Replace any with your own image.</span></div>
+        <div class="meter" aria-label="Screenshots ready"><i style="width:${Math.round(have / FIGURES.length * 100)}%"></i></div>
+        <div class="figs">${FIGURES.map((f) => { const own = S.exportOver.files[f.name]; const e = figs[f.name]; const src = own ? URL.createObjectURL(own) : e ? e.url : ''; return `<figure class="fig ${src ? 'ok' : 'miss'}">
+          <span class="badge pill ${own ? 'accent' : e ? 'ok' : 'warn'}">${own ? 'your image' : e ? 'captured' : 'missing'}</span>
+          <div class="thumb">${src ? `<img src="${src}" alt="${esc(f.title)}" loading="lazy">` : `<span class="small muted">Task ${f.task} not captured</span>`}</div>
+          <figcaption><b>Task ${f.task}. ${esc(f.title)}</b><span class="muted">${esc(f.tcode)} · ${own ? esc(own.name) : e ? `run #${e.job_id} · ${esc(fmtTime(e.created_at))}` : 'run this task or attach an image'}</span>
+          <div class="row"><label class="btn sm">${src ? 'Replace' : 'Attach'}<input type="file" accept="image/*" data-over="${f.name}"></label>${own ? `<button class="btn sm ghost" data-unover="${f.name}">Use capture</button>` : ''}</div></figcaption></figure>` }).join('')}</div>
+      </section>
+      <section class="card scroll"><h2>Task status in the document</h2>
+        <table class="t status-t"><thead><tr><th>#</th><th>Task</th><th>Status</th><th>Recorded</th><th>Run</th></tr></thead><tbody>
+        ${Object.entries(status).map(([t, s]) => `<tr><td>${t}</td><td>${esc(S.pack?.tasks?.find((x) => x.id === Number(t))?.title || '')}</td><td><span class="pill ${/Verified|Done/.test(s.state) ? 'ok' : s.state === 'Failed' ? 'err' : 'warn'}">${esc(s.state)}</span></td><td class="small muted">${esc(fmtTime(s.at))}</td><td class="small">${s.job ? `#${s.job}` : ''}</td></tr>`).join('')}
+        </tbody></table></section>
+    </div>
+    <aside class="stack">
+      <section class="card stack">
+        <h2>Cover page</h2>
+        <div class="field"><label for="expName">Student name</label><input class="input" id="expName" value="${esc(saved.name ?? sub.user.name ?? '')}" autocomplete="name"></div>
+        <div class="field"><label for="expSec">Section</label><input class="input" id="expSec" value="${esc(saved.section || '')}" placeholder="e.g. BSIT 3A"></div>
+        <button class="btn primary huge" id="expGo"><span>Export Submission Package (.docx)</span><i class="shine" aria-hidden="true"></i></button>
+        <p class="small muted" id="expProg" aria-live="polite">One file: ${esc(fileName(d))}</p>
+      </section>
+      <section class="card stack concl">
+        <div class="row" style="justify-content:space-between"><h2>Conclusion</h2><span class="pill">variant <b id="cvN">${S.exportVar.k + 1}</b> / ${CONCLUSION_COUNT}</span></div>
+        <div id="cvText">${conclusion(d, S.exportVar.k).map((x) => `<p>${esc(x)}</p>`).join('')}</div>
+        <div class="concl-nav"><button class="btn sm" id="cvPrev">Previous</button><button class="btn sm" id="cvNext">Next</button><button class="btn sm" id="cvRand">Shuffle</button><button class="btn sm ghost" id="cvBase">Default for ${esc(sap)}</button></div>
+        <p class="small muted">${CONCLUSION_COUNT} conclusions per LEARN-### with no sentence repeated between them. The default is fixed per account, so classmates start from different text.</p>
+      </section>
+    </aside>
+  </div>`
+  const paintConcl = () => { $('#cvN').textContent = S.exportVar.k + 1; $('#cvText').innerHTML = conclusion(d, S.exportVar.k).map((x) => `<p>${esc(x)}</p>`).join('') }
+  const step = (n) => { S.exportVar.k = (S.exportVar.k + n + CONCLUSION_COUNT) % CONCLUSION_COUNT; paintConcl() }
+  $('#cvPrev').onclick = () => step(-1)
+  $('#cvNext').onclick = () => step(1)
+  $('#cvRand').onclick = () => { let k; do { k = Math.floor(Math.random() * CONCLUSION_COUNT) } while (k === S.exportVar.k); S.exportVar.k = k; paintConcl() }
+  $('#cvBase').onclick = () => { S.exportVar.k = base; paintConcl() }
+  $('#expAcc').onchange = (e) => { S.exportAcc = e.target.value; viewExport() }
+  document.querySelectorAll('[data-over]').forEach((i) => i.addEventListener('change', () => { const f = i.files[0]; if (!f) return; if (!f.type.startsWith('image/')) return toast('Pick an image file', true); S.exportOver.files[i.dataset.over] = f; viewExport() }))
+  document.querySelectorAll('[data-unover]').forEach((b) => b.addEventListener('click', () => { delete S.exportOver.files[b.dataset.unover]; viewExport() }))
+  const remember = () => localStorage.setItem('uc_export', JSON.stringify({ name: $('#expName').value, section: $('#expSec').value }))
+  $('#expName').oninput = remember; $('#expSec').oninput = remember
+  $('#expGo').onclick = run(async () => {
+    const btn = $('#expGo'); btn.disabled = true; btn.classList.add('busy')
+    try {
+      const blob = await buildSubmission(sub, { student: $('#expName').value.trim(), section: $('#expSec').value.trim(), variant: S.exportVar.k, overrides: S.exportOver.files }, (m) => { $('#expProg').textContent = m })
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileName(d); document.body.append(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000)
+      $('#expProg').textContent = `Saved ${fileName(d)} (${(blob.size / 1048576).toFixed(1)} MB)`
+      toast('Submission package downloaded')
+    } finally { btn.disabled = false; btn.classList.remove('busy') }
+  })
 }
 
 function verifiedTable(events) {
