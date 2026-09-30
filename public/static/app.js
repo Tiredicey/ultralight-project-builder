@@ -274,7 +274,7 @@ async function viewCanvas() {
   <div class="canvas-wrap">
     <section>
       <div class="viewport" id="vp" tabindex="0" aria-label="Live SAP canvas. Click to interact, type while focused.">
-        <div class="empty" id="vpEmpty">Waiting for the runner to stream the first frame.</div>
+        <div class="empty" id="vpEmpty">${['done', 'failed', 'aborted'].includes(S.job.status) ? 'Loading the last frame of this run.' : 'Waiting for the runner to stream the first frame.'}</div>
         <img id="vpImg" alt="Live SAP WebGUI frame" hidden>
         <div class="overlay" id="ov"></div>
         <div class="hud"><span id="hudL"></span><span id="hudR"></span></div>
@@ -359,10 +359,14 @@ function wireCanvas() {
 
 function flushType() { if (S.typeBuf) { send({ type: 'type', text: S.typeBuf }); S.typeBuf = '' } }
 
+let framePending = false
 const pollFrame = run(async () => {
-  if (!S.job || !$('#vp')) return
-  const f = await http(`/jobs/${S.job.id}/frame?since=${S.frameSeq}`)
-  if (!f) return
+  if (!S.job || !$('#vp') || framePending) return
+  const id = S.job.id
+  framePending = true
+  let f
+  try { f = await http(`/jobs/${id}/frame?since=${S.frameSeq}`) } finally { framePending = false }
+  if (!f || !S.job || S.job.id !== id || !$('#vp')) return
   S.frame = f; S.frameSeq = f.seq
   const img = $('#vpImg')
   img.src = `data:image/jpeg;base64,${f.image}`

@@ -233,6 +233,7 @@ The earlier motion pass gave each of the 9 pages its own colour set, animated dr
   - `runner/dev/sitecheck.mjs` ran against wrangler dev in 4 modes: dark and light (all 9 pages each), phone 390 px and reduced motion (4 pages each). Result: 0 script errors, no sideways scrolling, one `<h1>` per page, content visible within 120 ms, nothing left hidden.
   - The script now reads `clientWidth`. The old `innerWidth` check missed the phone overflow above, because on a mobile viewport `innerWidth` grows with the page.
   - `scripts/e2e-local.sh` 13/13 and `scripts/e2e-features.sh` 22/22. The runner-version assertion in the second script expected 1.2.0 and failed before this change. It now expects 1.3.0, the version the site reports.
+- **Live canvas on a finished run.** The canvas polled the frame every 700 ms and never waited for the previous request. A 175 KB frame takes about 1.6 s, so up to three requests overlapped, and a finished run could sit on "Waiting for the runner" for several seconds. Before this fix, a Playwright probe caught three concurrent `since=-1` requests on the live site. The canvas now sends one request at a time and drops a reply that belongs to a run you have left. A finished run says "Loading the last frame".
 - **Not confirmed:** Safari and Firefox. Only Chromium (Playwright 1.63) was used.
 
 ## Stack
