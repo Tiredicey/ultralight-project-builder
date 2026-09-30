@@ -22,7 +22,7 @@ const money = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 
 export function pickFigures(sub) {
   const out = {}
   for (const f of FIGURES) {
-    const all = sub.evidence.filter((x) => x.name === f.name && x.flag !== 'skipped')
+    const all = sub.evidence.filter((x) => x.name === f.name && x.flag !== 'skipped' && x.flag !== 'state')
     const ordered = f.prefer === 'first' ? [...all].reverse() : all
     const e = ordered.find((x) => !x.flag) || ordered[0]
     out[f.name] = e ? { ...e, url: `/api/jobs/${e.job_id}/evidence/${e.id}` } : null

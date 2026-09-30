@@ -234,11 +234,14 @@ api.get('/me/submission/:sapUser', async (c) => {
   const ids = jobs.map((x) => x.id)
   const evidence = ids.length ? (await c.env.DB.prepare(`SELECT id, job_id, task, name, caption, mime, created_at FROM evidence WHERE kind = 'screenshot' AND job_id IN (${ids.map(() => '?').join(',')}) ORDER BY id DESC`).bind(...ids).all<any>()).results : []
   const checks = ids.length ? (await c.env.DB.prepare(`SELECT job_id, step_key, level, message, created_at FROM events WHERE job_id IN (${ids.map(() => '?').join(',')}) AND step_key IS NOT NULL AND level IN ('ok', 'warn', 'error') ORDER BY id DESC LIMIT 2000`).bind(...ids).all<any>()).results : []
-  const notes = ids.length ? (await c.env.DB.prepare(`SELECT job_id, step_key, message FROM events WHERE job_id IN (${ids.map(() => '?').join(',')}) AND step_key IS NOT NULL AND (message LIKE '%skipped, already done%' OR message LIKE '%already done in SAP%' OR message LIKE '%distinct earliest start%')`).bind(...ids).all<any>()).results : []
+  const notes = ids.length ? (await c.env.DB.prepare(`SELECT job_id, step_key, message FROM events WHERE job_id IN (${ids.map(() => '?').join(',')}) AND step_key IS NOT NULL AND (message LIKE '%skipped, already done%' OR message LIKE '%already done in SAP%' OR message LIKE '%distinct earliest start%' OR message LIKE 'Report totals%')`).bind(...ids).all<any>()).results : []
   const flagged = evidence.map((e) => {
     const mine = notes.filter((n) => n.job_id === e.job_id && String(n.step_key).split('.')[0] === String(e.task))
     if (mine.some((n) => /skipped, already done|already done in SAP/.test(n.message))) return { ...e, flag: 'skipped', flagNote: `Task ${e.task} was already done in SAP, so run #${e.job_id} skipped it; this capture shows another screen` }
     const m = mine.map((n) => /(\d+) distinct earliest start/.exec(n.message)).find(Boolean)
+    const want: Record<string, [number, string]> = { 't8-costs-planned': [0, 'no actual cost yet'], 't12-costs-after-confirmation': [1750, 'actual 1,750.00'], 't14-costs-final': [11450, 'actual 11,450.00'] }
+    const tot = mine.map((n) => /Report totals Actual ([\d,.]+)/.exec(n.message)).find(Boolean)
+    if (want[e.name] && tot) { const got = Number(tot[1].replace(/,/g, '')); if (Math.abs(got - want[e.name][0]) > 0.005) return { ...e, flag: 'state', flagNote: `This report shows actual ${tot[1]} EUR; Task ${e.task} should show ${want[e.name][1]}. It was re-run after later postings` } }
     if (e.name === 't3-network-before' && m && Number(m[1]) > 1) return { ...e, flag: 'after', flagNote: `Captured after the relationships existed (${m[1]} different earliest start dates, a true before-state has one)` }
     return e
   })
