@@ -458,7 +458,7 @@ async function viewExport() {
   <div class="export-grid">
     <div class="stack">
       <section class="card stack">
-        <div class="row" style="justify-content:space-between"><h2>Required screenshots</h2><span class="small muted">Newest capture per figure across your runs. Replace any with your own image.</span></div>
+        <div class="row" style="justify-content:space-between"><h2>Required screenshots</h2><span class="small muted">Newest capture per figure across your runs; the two "before" figures (Tasks 3 and 8) use the earliest. Replace any with your own image.</span></div>
         <div class="meter" aria-label="Screenshots ready"><i style="width:${Math.round(have / FIGURES.length * 100)}%"></i></div>
         <div class="figs">${FIGURES.map((f) => { const own = S.exportOver.files[f.name]; const e = figs[f.name]; const src = own ? URL.createObjectURL(own) : e ? e.url : ''; return `<figure class="fig ${src ? 'ok' : 'miss'}">
           <span class="badge pill ${own ? 'accent' : e ? 'ok' : 'warn'}">${own ? 'your image' : e ? 'captured' : 'missing'}</span>

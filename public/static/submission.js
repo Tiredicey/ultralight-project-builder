@@ -4,9 +4,9 @@ import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
 export const FIGURES = [
   { name: 't1-wbs-responsibilities', task: 1, tcode: 'CJ20N', title: 'WBS elements and responsible cost centres', what: (d) => `Responsibilities tab: ${d.project} and ${d.project}-1 to -5, controlling area ${d.controllingArea}` },
   { name: 't2-activity-overview', task: 2, tcode: 'CJ20N', title: 'Activity overview', what: () => 'Activities 0010 to 0140 with duration, work, work centre and WBS assignment' },
-  { name: 't3-network-before', task: 3, tcode: 'Project Network Graph', title: 'Network graph before relationships', what: () => 'All activities side by side, no links yet' },
+  { name: 't3-network-before', task: 3, tcode: 'Project Network Graph', title: 'Network graph before relationships', prefer: 'first', what: () => 'All activities side by side, no links yet' },
   { name: 't5-network-after', task: 5, tcode: 'Project Network Graph', title: 'Network graph after relationships', what: () => '22 finish-to-start relationships from 0010 through 0140' },
-  { name: 't8-costs-planned', task: 8, tcode: 'S_ALR_87013542', title: 'Planned cost report', what: () => 'Plan, commitments and actuals after release, before Task 10' },
+  { name: 't8-costs-planned', task: 8, tcode: 'S_ALR_87013542', title: 'Planned cost report', prefer: 'first', what: () => 'Plan, commitments and actuals after release, before Task 10' },
   { name: 't9-structure', task: 9, tcode: 'CN41N', title: 'Structure overview', what: (d) => `${d.project}, ${d.psText}, network and WBS P/2${d.suffix}-1 to -5` },
   { name: 't11-confirmation', task: 11, tcode: 'CN25', title: 'Confirmation of activity 0010', what: () => '35 h actual of 80 h, 45 h remaining, partial confirmation' },
   { name: 't12-costs-after-confirmation', task: 12, tcode: 'S_ALR_87013542', title: 'Cost report after confirmation', what: () => 'Actual 1,750.00 EUR on 8000000 Labor' },
@@ -22,7 +22,8 @@ const money = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 
 export function pickFigures(sub) {
   const out = {}
   for (const f of FIGURES) {
-    const e = sub.evidence.find((x) => x.name === f.name)
+    const all = sub.evidence.filter((x) => x.name === f.name)
+    const e = f.prefer === 'first' ? all[all.length - 1] : all[0]
     out[f.name] = e ? { ...e, url: `/api/jobs/${e.job_id}/evidence/${e.id}` } : null
   }
   return out
