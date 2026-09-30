@@ -349,11 +349,14 @@ api.post('/admin/users/:id', async (c) => {
 
 api.post('/admin/accounts', async (c) => {
   const b = await c.req.json().catch(() => ({}))
-  const sapUser = String(b.sapUser || '').toUpperCase().trim()
-  if (!suffixOf(sapUser)) return c.json({ error: 'SAP user must look like LEARN-### (three digits)' }, 400)
-  await c.env.DB.prepare('INSERT OR IGNORE INTO sap_accounts (sap_user, client, label, created_at) VALUES (?, ?, ?, ?)').bind(sapUser, SAP_CLIENT, String(b.label || '').slice(0, 80) || null, now()).run()
-  await audit(c, c.get('user').id, 'admin.account.add', { sapUser })
-  return c.json({ ok: true })
+  const list = [...new Set(String(b.sapUser || '').toUpperCase().split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean))]
+  if (!list.length) return c.json({ error: 'Enter at least one LEARN-###' }, 400)
+  const bad = list.filter((x) => !suffixOf(x))
+  if (bad.length) return c.json({ error: `Not LEARN-### (three digits): ${bad.join(', ')}` }, 400)
+  const ins = c.env.DB.prepare('INSERT OR IGNORE INTO sap_accounts (sap_user, client, label, created_at) VALUES (?, ?, ?, ?)')
+  await c.env.DB.batch(list.map((u) => ins.bind(u, SAP_CLIENT, String(b.label || '').slice(0, 80) || null, now())))
+  await audit(c, c.get('user').id, 'admin.account.add', { sapUsers: list })
+  return c.json({ ok: true, added: list })
 })
 
 api.delete('/admin/accounts/:id', async (c) => {
@@ -370,6 +373,18 @@ api.post('/admin/runners', async (c) => {
   await c.env.DB.prepare('INSERT INTO runners (name, token_hash, accounts, created_at) VALUES (?, ?, ?, ?)').bind(String(b.name || 'runner').slice(0, 60), await sha256(token), JSON.stringify(accounts), now()).run()
   await audit(c, c.get('user').id, 'admin.runner.create', { name: b.name, accounts })
   return c.json({ token })
+})
+
+api.put('/admin/runners/:id', async (c) => {
+  const b = await c.req.json().catch(() => ({}))
+  const raw = Array.isArray(b.accounts) ? b.accounts : String(b.accounts || '').split(/[\s,;]+/)
+  const accounts = [...new Set(raw.map((s: string) => String(s).toUpperCase().trim()).filter(Boolean))]
+  const bad = accounts.filter((s) => !suffixOf(s))
+  if (bad.length) return c.json({ error: `Not LEARN-### (three digits): ${bad.join(', ')}` }, 400)
+  const r = await c.env.DB.prepare('UPDATE runners SET accounts = ? WHERE id = ? AND revoked = 0').bind(JSON.stringify(accounts), Number(c.req.param('id'))).run()
+  if (!r.meta.changes) return c.json({ error: 'Runner not found or revoked' }, 404)
+  await audit(c, c.get('user').id, 'admin.runner.limit', { id: c.req.param('id'), accounts })
+  return c.json({ ok: true, accounts })
 })
 
 api.delete('/admin/runners/:id', async (c) => {

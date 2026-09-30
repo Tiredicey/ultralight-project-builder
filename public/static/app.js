@@ -696,13 +696,13 @@ async function viewAdmin() {
     </tbody></table></section>
   <div class="grid2">
     <section class="card stack"><h2>SAP accounts, client 236</h2>
-      <form class="row" id="addAcc"><input class="input" name="sapUser" placeholder="LEARN-###" required pattern="[Ll][Ee][Aa][Rr][Nn]-\\d{3}" style="max-width:10rem"><input class="input" name="label" placeholder="Label (optional)" style="max-width:12rem"><button class="btn sm primary">Add</button></form>
+      <form class="row" id="addAcc"><input class="input" name="sapUser" placeholder="LEARN-###, LEARN-### ..." required aria-label="One or more LEARN-### accounts, comma separated" style="max-width:16rem"><input class="input" name="label" placeholder="Label (optional)" style="max-width:12rem"><button class="btn sm primary">Add</button></form>
       <table class="t"><tbody>${a.accounts.map((acc) => `<tr><td class="mono">${esc(acc.sap_user)}</td><td>${esc(acc.label || '')}</td><td class="mono small">P/2${esc(acc.sap_user.slice(-3))}</td><td><button class="btn sm danger" data-delacc="${acc.id}">Remove</button></td></tr>`).join('') || '<tr><td class="muted">None yet</td></tr>'}</tbody></table>
     </section>
     <section class="card stack"><h2>Runners</h2>
       <form class="row" id="addRun"><input class="input" name="name" placeholder="Runner name" required style="max-width:12rem"><input class="input" name="accounts" placeholder="Limit to LEARN-### (comma, optional)"><button class="btn sm primary">Create token</button></form>
       <div id="newTok"></div>
-      <table class="t"><tbody>${a.runners.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${r.accounts.length ? esc(r.accounts.join(', ')) : 'all accounts'}${r.version ? ` · v${esc(r.version)}` : ''}</div></td><td>${r.revoked ? '<span class="pill err">revoked</span>' : r.online ? '<span class="pill ok">online</span>' : `<span class="pill">seen ${esc(ago(r.last_seen))}</span>`}</td><td>${r.revoked ? '' : `<button class="btn sm danger" data-rev="${r.id}">Revoke</button>`}</td></tr>`).join('') || '<tr><td class="muted">No runners</td></tr>'}</tbody></table>
+      <table class="t"><tbody>${a.runners.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${r.accounts.length ? esc(r.accounts.join(', ')) : 'all accounts'}${r.version ? ` · v${esc(r.version)}` : ''}</div></td><td>${r.revoked ? '<span class="pill err">revoked</span>' : r.online ? '<span class="pill ok">online</span>' : `<span class="pill">seen ${esc(ago(r.last_seen))}</span>`}</td><td>${r.revoked ? '' : `<div class="row"><input class="input" data-limit="${r.id}" value="${esc(r.accounts.join(', '))}" placeholder="all accounts" aria-label="Accounts this runner may drive" style="width:11rem"><button class="btn sm" data-savelimit="${r.id}">Save limit</button><button class="btn sm danger" data-rev="${r.id}">Revoke</button></div>`}</td></tr>`).join('') || '<tr><td class="muted">No runners</td></tr>'}</tbody></table>
     </section>
   </div>
   <section class="card scroll" style="margin-top:1rem"><h2>Audit log</h2><table class="t"><tbody>${a.audit.map((x) => `<tr><td class="small muted">${esc(fmtTime(x.created_at))}</td><td>${esc(x.email || '')}</td><td class="mono small">${esc(x.action)}</td><td class="small mono">${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></section>`
@@ -743,7 +743,7 @@ async function viewAdmin() {
   document.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', run(async () => { await http(`/admin/users/${b.dataset.u}`, { method: 'POST', body: { status: b.dataset.st } }); toast(`User ${b.dataset.st}`); refresh() })))
   document.querySelectorAll('[data-role]').forEach((s) => s.addEventListener('change', run(async () => { await http(`/admin/users/${s.dataset.role}`, { method: 'POST', body: { role: s.value } }); toast('Role updated') })))
   document.querySelectorAll('[data-grant]').forEach((c) => c.addEventListener('change', run(async () => { const uid = c.dataset.grant; const ids = [...document.querySelectorAll(`[data-grant="${uid}"]:checked`)].map((x) => Number(x.value)); await http(`/admin/users/${uid}`, { method: 'POST', body: { accounts: ids } }); toast('Grants saved') })))
-  $('#addAcc').onsubmit = run(async (e) => { e.preventDefault(); await http('/admin/accounts', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); refresh() })
+  $('#addAcc').onsubmit = run(async (e) => { e.preventDefault(); const r = await http('/admin/accounts', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); toast(`Allowlisted ${r.added.join(', ')}`); refresh() })
   document.querySelectorAll('[data-delacc]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Remove this SAP account and its grants?')) return; await http(`/admin/accounts/${b.dataset.delacc}`, { method: 'DELETE' }); refresh() })))
   $('#addRun').onsubmit = run(async (e) => {
     e.preventDefault()
@@ -754,6 +754,7 @@ async function viewAdmin() {
     $('#cpTok').onclick = () => { navigator.clipboard?.writeText(r.token); toast('Token copied') }
   })
   document.querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Revoke this runner token?')) return; await http(`/admin/runners/${b.dataset.rev}`, { method: 'DELETE' }); refresh() })))
+  document.querySelectorAll('[data-savelimit]').forEach((b) => b.addEventListener('click', run(async () => { const v = document.querySelector(`[data-limit="${b.dataset.savelimit}"]`).value; const r = await http(`/admin/runners/${b.dataset.savelimit}`, { method: 'PUT', body: { accounts: v } }); toast(r.accounts.length ? `Runner limited to ${r.accounts.join(', ')}` : 'Runner may drive all accounts'); refresh() })))
 }
 
 boot().catch((e) => { $('#app').innerHTML = `<div class="center"><div class="stack"><h1>Could not load</h1><p class="muted">${esc(e.message)}</p></div></div>` })
