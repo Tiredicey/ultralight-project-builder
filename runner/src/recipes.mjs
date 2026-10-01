@@ -1,4 +1,4 @@
-import { waitPopup, openProjectFromWorklist, settle, captureDom, statusbar, popupText, findByLabel, typeInto, clickTitle, selectTreeObject, treeRows, expandProjectTree, grids, cellState, dialogButton, dialogPickRow, handlePopups, clickTab } from './sap.mjs'
+import { projectBuilderWelcome, waitPopup, openProjectFromWorklist, settle, captureDom, statusbar, popupText, findByLabel, typeInto, clickTitle, selectTreeObject, treeRows, expandProjectTree, grids, cellState, dialogButton, dialogPickRow, handlePopups, clickTab } from './sap.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const norm = (v) => String(v ?? '').trim()
@@ -322,6 +322,7 @@ export async function supplierInvoice(ctx, s) {
 
 export async function createProject(ctx, s) {
   const p = ctx.page
+  await projectBuilderWelcome(p)
   for (let k = 0; k < 3 && (await popupText(p)); k++) { const t = await popupText(p); if (/Hierarchy levels|User-specific/i.test(t)) { const f = await findByLabel(p, [/Hierarchy levels/i]); if (f) await typeInto(p, f, '99') } await handlePopups(p, [/^Continue$/i, /^OK$/i, /Confirm/i, /^Cancel$/i]) }
   const exists = await openProjectFromWorklistQuick(p, s.project)
   if (exists) { ctx.vars.existing = s.project; return { ok: true, note: `${s.project} already exists in SAP, creation skipped`, existed: true } }

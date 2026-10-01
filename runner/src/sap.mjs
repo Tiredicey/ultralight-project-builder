@@ -284,6 +284,30 @@ async function selectAltRow(page, hit, rows, { want, text }) {
   return { ok: true, hit, header: hdr, network: net ? net[1] : null }
 }
 
+export async function projectBuilderWelcome(page) {
+  const done = []
+  for (let k = 0; k < 4; k++) {
+    const t = await popupText(page)
+    if (!t) break
+    if (/Welcome to the Project Builder|Project Builder: Options/i.test(t)) {
+      const skip = (await captureDom(page)).els.find((e) => e.k === 'check' && /Skip this in future/i.test(e.t))
+      if (skip && skip.v !== 'true') { await page.mouse.click(skip.x + 6, skip.y + skip.h / 2); await sleep(600) }
+      const b = await clickTitle(page, ['Set options']) || await clickButton(page, [/Set options/i, /^Continue/i])
+      if (!b) await page.keyboard.press('Enter')
+      await settle(page, 1500); done.push('welcome dialog: skip ticked, options set'); continue
+    }
+    if (/User-specific options|Hierarchy levels/i.test(t)) {
+      const f = await findByLabel(page, [/Expanded hierarchy levels/i, /Hierarchy levels/i])
+      if (f && f.v !== '99') { await typeInto(page, f, '99'); await page.keyboard.press('Tab'); await sleep(500) }
+      const b = await clickTitle(page, ['Continue']) || await clickButton(page, [/^Continue/i, /^OK$/i])
+      if (!b) await page.keyboard.press('Enter')
+      await settle(page, 1500); done.push('user options: hierarchy levels 99'); continue
+    }
+    break
+  }
+  return done
+}
+
 export async function recoverSession(page, ctx) {
   const notes = []
   const pop = await popupText(page)

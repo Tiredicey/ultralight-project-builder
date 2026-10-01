@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput, recoverSession } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput, recoverSession, projectBuilderWelcome } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
 import { Checker } from './checks.mjs'
 import { loadEnv, localAccounts } from './env.mjs'
@@ -41,7 +41,7 @@ async function call(path, body) {
 const ERR_RE = /(does not exist|not allowed|not authorized|keine Berechtigung|invalid|ungültig|is locked|gesperrt|error|fehler|not possible|cannot be|must be)/i
 const isErr = async (page) => page.evaluate(() => !!document.querySelector('[class*="MessageBar"][class*="rror"], [class*="sbar"] [class*="rror"], [class*="Msg"][class*="rror"] , [title="Error"], [aria-label="Error"]')).catch(() => false)
 
-const RETRYABLE = /Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
+const RETRYABLE = /Create button not found|Create > Project menu item not found|Project definition fields not found|Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
 
 class Job {
   constructor(job, plan, browser) {
@@ -255,7 +255,7 @@ class Job {
       return { ok: true, warn: true, manual: true, note: `${s.label}: done by operator`, statusbar: await statusbar(p) }
     }
     if (s.op !== 'shot') this.rctx.vars.fastShot = false
-    if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); return r.ok ? { ok: true, note: `${s.code} open`, statusbar: r.statusbar } : r }
+    if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); if (!r.ok) return r; const w = s.code === 'CJ20N' ? await projectBuilderWelcome(p) : []; return { ok: true, note: `${s.code} open${w.length ? ` (${w.join('; ')})` : ''}`, statusbar: r.statusbar } }
     if (s.op === 'dismiss') { const r = await handlePopups(p, (s.buttons || []).map((b) => new RegExp(`^${b}$`, 'i'))); return { ok: true, note: r ? `Popup handled: ${r.clicked || 'left open'}` : 'No popup' } }
     if (s.op === 'key') { await p.keyboard.press(s.press); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.press} pressed`) }
     if (s.op === 'tab') { const t = await clickTab(p, s.names); if (!t) return s.optional ? { ok: true, note: 'Tab not present, continuing' } : { ok: false, reason: `Tab ${s.names.join(' / ')} not found` }; return { ok: true, note: `Tab ${t.t}` } }
@@ -269,6 +269,7 @@ class Job {
     }
     if (s.op === 'openProject') {
       const r = await gotoTxn(p, this.ctx, 'CJ20N'); if (!r.ok) return r
+      await projectBuilderWelcome(p)
       await handlePopups(p, [/^Continue$/i, /^Cancel$/i])
       let hit = (await openProjectFromWorklist(p, s.project)) ? s.project : null
       if (!hit) {
