@@ -390,6 +390,31 @@ Checked live: tasks 2, 4, 6 run a second time changed nothing, and tasks 11 and 
 
 **Not confirmed:** a run on a LEARN account that has never had a project (a "fresh" Task 1 create on 1.3.4). LEARN-641 passed that path on 1.3.1 (run #25); P/2636 already existed before this session, so Task 1 creation was not exercised for 636.
 
+## Page add-ons (2026-10-01)
+
+`public/static/extras.js` adds a working tool to every page. It reads the page that is already rendered, so the original features are unchanged. Estimates come from your own finished runs, task status from Validate, and traces from the 22 relationships. Nothing is invented.
+
+| Page | Add-on | What it does |
+|---|---|---|
+| Everywhere | Command palette | `Ctrl+K` or `/`: pages, all 14 tasks (opens the task sheet at that task), Validate per account, recent runs, theme, sign out |
+| Everywhere | Shortcuts | `g` then `l c s r j p e g o` jumps to a page, `t` switches theme, `f` puts the canvas full screen, `?` lists them. Off while typing or while the canvas has focus |
+| Sign in | Caps Lock warning | Under the password field while Caps Lock is on |
+| Run pack | Before you start | Step count for the ticked tasks, a time estimate from your finished runs (seconds per step), and one click for "only the tasks not verified in SAP" from the last Validate |
+| Live canvas | Run bar | Elapsed clock, time left at the current pace, Save frame (JPEG of the current SAP frame), Full screen, Alert me (browser notification when a run waits, finishes or fails while the tab is in the background) |
+| Task sheet | Find and tick off | Search all values (for example `6300000`, `CN25`), click a value to copy it, a Done tick per task with a progress bar, saved in the browser |
+| Readiness | Auto refresh, diagnostics | Optional 30 s refresh; Copy diagnostics puts every check and task cell on the clipboard as text |
+| Runs and evidence | Status chips, viewer | Filter runs by status with counts; screenshots open in a viewer with Previous/Next, arrow keys and Download |
+| Project data | Network trace | Hover or tab to an activity: its predecessors and successors stay lit, the rest fade, and a line lists them. Click jumps to the activity row. Tables get a filter and CSV export |
+| Export submission | Drop and paste | Drag an image onto a figure, or click a figure and paste a screenshot, to attach it |
+| Setup guide | Copy and progress | A Copy button on every command block, a tick per step with a progress bar |
+| Owner console | Filter and CSV | Every table gets a filter box and CSV export |
+
+Rules from `facts.txt` that this keeps: one brass accent, one corner radius, no glow or fake status dots, real `<button>` and `<dialog>` elements with focus rings, a reduced-motion path (no row flash, no fades), tools hidden when printing, no em dashes.
+
+**Check:** `runner/dev/extrascheck.mjs` uses every add-on at desktop 1440 px, phone 390 px and with reduced motion: **80/80** against wrangler dev, 0 script errors, no sideways scroll. `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22.
+
+**Not confirmed:** Firefox and Safari (only Chromium was tested). The headless test cannot show a real OS notification, so "Alert me" was checked only up to the permission prompt.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.
