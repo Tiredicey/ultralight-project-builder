@@ -339,6 +339,8 @@ After that, start a new run for LEARN-636 (Autopilot, tasks 1-14). Task 1 is ski
 
 **Tests (sandbox):** `runner/dev/treecheck.mjs` 13/13 (new case C is built from the job #27 frame: no network row, Activity Overview falls back to the top WBS). `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22. Claim cleanup checked against wrangler dev: the job is kept while listed, kept for a runner that sends no list, and closed when the list is empty. A new job for the freed account is accepted.
 
+**Live (2026-10-01 09:04 UTC):** Oracle VM ownership fixed, runner pulled and restarted on 1.3.2 (journal: `Runner 1.3.2 ... Waiting for jobs`). The site reports `latest 1.3.2` and runner 1.3.2 online. On its first claim, the site closed orphaned job #27 with "Runner restarted while this job was open", so LEARN-636 is free for a new run. The live login page loaded with 0 console messages.
+
 **Not confirmed:** a live LEARN-636 run on 1.3.2. The runner holds passwords for LEARN-626 and LEARN-653 only (`/api/me/readiness`, `accountsWithPassword`). No LEARN-636 SAP password was supplied, so a new run needs it entered on the Launch page or added to `SAP_ACCOUNTS`.
 
 ## Stack
