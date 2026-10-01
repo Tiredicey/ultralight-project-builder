@@ -14,8 +14,37 @@ async function http(path, opts = {}) {
   const res = await fetch(`/api${path}`, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined })
   if (res.status === 204) return null
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) { const e = new Error(data.error || `HTTP ${res.status}`); e.status = res.status; e.data = data; throw e }
+  if (!res.ok) { if (/^D1_(WRITE|READ)_LIMIT$/.test(data.code || '')) quotaBanner(data); const e = new Error(data.error || `HTTP ${res.status}`); e.status = res.status; e.data = data; throw e }
+  if (data && data.quota && data.quota.retryAt) quotaBanner({ code: data.quota.kind === 'read' ? 'D1_READ_LIMIT' : 'D1_WRITE_LIMIT', retryAt: data.quota.retryAt })
   return data
+}
+
+let quotaTimer = 0
+function quotaBanner(q) {
+  const until = Number(q.retryAt) || 0
+  if (until <= Date.now()) return
+  let el = document.getElementById('quota-banner')
+  if (!el) {
+    el = document.createElement('aside')
+    el.id = 'quota-banner'
+    el.className = 'quota-banner'
+    el.setAttribute('role', 'status')
+    el.innerHTML = '<div class="quota-text"><b></b><span></span></div><div class="quota-actions"><button class="btn sm" type="button" data-q="retry">Try again</button><button class="btn sm ghost" type="button" data-q="hide">Hide</button></div>'
+    el.querySelector('[data-q="hide"]').onclick = () => { el.hidden = true }
+    el.querySelector('[data-q="retry"]').onclick = () => location.reload()
+    document.body.prepend(el)
+  }
+  el.dataset.until = String(Math.max(Number(el.dataset.until) || 0, until))
+  el.querySelector('b').textContent = q.code === 'D1_READ_LIMIT' ? 'Database read allowance used up for today' : 'Saving is paused until 00:00 UTC'
+  const tick = () => {
+    const left = Number(el.dataset.until) - Date.now()
+    if (left <= 0) { clearInterval(quotaTimer); el.remove(); return }
+    const h = Math.floor(left / 36e5), m = Math.max(1, Math.ceil((left % 36e5) / 6e4))
+    el.querySelector('span').textContent = `Cloudflare's free daily database allowance is reached. You can still sign in and view runs, evidence, the task sheet and project data. New runs, approvals and settings save again in ${h ? `${h} h ` : ''}${m} min (${new Date(Number(el.dataset.until)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} your time). The runner keeps working in SAP and reports less often until then.`
+  }
+  tick()
+  clearInterval(quotaTimer)
+  quotaTimer = setInterval(tick, 30000)
 }
 
 function toast(msg, err = false) {
@@ -48,6 +77,7 @@ const errorHtml = (msg) => `<div class="view-state" role="alert"><div class="sta
 
 async function boot() {
   S.health = await http('/health').catch(() => ({ initialized: true }))
+  if (S.health?.quota?.retryAt) quotaBanner({ code: S.health.quota.kind === 'read' ? 'D1_READ_LIMIT' : 'D1_WRITE_LIMIT', retryAt: S.health.quota.retryAt })
   S.user = (await http('/auth/me')).user
   const hash = location.hash.slice(1)
   if (hash) { S.view = hash.split('/')[0]; if (S.view === 'canvas' && hash.split('/')[1]) S.pendingJob = Number(hash.split('/')[1]) }
@@ -140,6 +170,7 @@ function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'log
       const body = Object.fromEntries(new FormData(e.target))
       const r = await http(`/auth/${mode}`, { method: 'POST', body })
       S.user = r.user
+      if (r.session === 'fallback') { quotaBanner({ code: 'D1_WRITE_LIMIT', retryAt: r.retryAt }); setTimeout(() => toast(r.notice), 600) }
       S.health = { ...S.health, initialized: true }
       document.body.classList.remove('dmz')
       transition(render)
@@ -896,6 +927,7 @@ async function viewAdmin() {
       <table class="t"><tbody>${a.runners.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${r.accounts.length ? esc(r.accounts.join(', ')) : 'all accounts'}${r.version ? ` · v${esc(r.version)}` : ''}</div></td><td>${r.revoked ? '<span class="pill err">revoked</span>' : r.online ? '<span class="pill ok">online</span>' : `<span class="pill">seen ${esc(ago(r.last_seen))}</span>`}</td><td>${r.revoked ? '' : `<div class="row"><input class="input" data-limit="${r.id}" value="${esc(r.accounts.join(', '))}" placeholder="all accounts" aria-label="Accounts this runner may drive" style="width:11rem"><button class="btn sm" data-savelimit="${r.id}">Save limit</button><button class="btn sm danger" data-rev="${r.id}">Revoke</button></div>`}</td></tr>`).join('') || '<tr><td class="muted">No runners</td></tr>'}</tbody></table>
     </section>
   </div>
+  <section class="card stack" id="usage-card" style="margin-top:1rem" aria-live="polite"><div class="row" style="justify-content:space-between"><h2>Database allowance today</h2><span class="small muted" id="usage-reset"></span></div><div id="usage-body" class="small muted">Checking Cloudflare...</div></section>
   <section class="card scroll" style="margin-top:1rem"><h2>Audit log</h2><table class="t"><tbody>${a.audit.map((x) => `<tr><td class="small muted">${esc(fmtTime(x.created_at))}</td><td>${esc(x.email || '')}</td><td class="mono small">${esc(x.action)}</td><td class="small mono">${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></section>`
   v.insertAdjacentHTML('beforeend', `
   <div class="grid2" style="margin-top:1rem">
@@ -930,6 +962,7 @@ async function viewAdmin() {
     paintDocs()
   })
   const refresh = () => viewAdmin()
+  paintUsage()
   $('#reg').onchange = run(async (e) => { await http('/admin/settings', { method: 'POST', body: { registration: e.target.value } }); toast(`Registration ${e.target.value}`) })
   document.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', run(async () => { await http(`/admin/users/${b.dataset.u}`, { method: 'POST', body: { status: b.dataset.st } }); toast(`User ${b.dataset.st}`); refresh() })))
   document.querySelectorAll('[data-role]').forEach((s) => s.addEventListener('change', run(async () => { await http(`/admin/users/${s.dataset.role}`, { method: 'POST', body: { role: s.value } }); toast('Role updated') })))
@@ -946,6 +979,18 @@ async function viewAdmin() {
   })
   document.querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Revoke this runner token?')) return; await http(`/admin/runners/${b.dataset.rev}`, { method: 'DELETE' }); refresh() })))
   document.querySelectorAll('[data-savelimit]').forEach((b) => b.addEventListener('click', run(async () => { const v = document.querySelector(`[data-limit="${b.dataset.savelimit}"]`).value; const r = await http(`/admin/runners/${b.dataset.savelimit}`, { method: 'PUT', body: { accounts: v } }); toast(r.accounts.length ? `Runner limited to ${r.accounts.join(', ')}` : 'Runner may drive all accounts'); refresh() })))
+}
+
+const meter = (label, used, cap) => { const pct = Math.min(100, Math.round((used / cap) * 1000) / 10); return `<div class="meter ${pct >= 100 ? 'full' : pct >= 80 ? 'high' : ''}"><div class="row" style="justify-content:space-between"><span>${label}</span><span class="mono">${used.toLocaleString()} / ${cap.toLocaleString()} · ${pct}%</span></div><div class="progress" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div></div>` }
+async function paintUsage() {
+  if (!$('#usage-body')) return
+  const u = await http('/admin/usage').catch((e) => ({ error: e.message }))
+  const el = $('#usage-body'); if (!el) return
+  if (u.resetsAt) $('#usage-reset').textContent = `Resets ${new Date(u.resetsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} your time (00:00 UTC)`
+  const hit = u.quota ? '<p class="pill err" style="width:fit-content">Limit reached today: saving resumes at 00:00 UTC</p>' : ''
+  if (u.total) { el.className = 'stack'; el.innerHTML = `${hit}${meter('Rows written (free plan: 100,000 per day)', u.total.rowsWritten, u.limits.rowsWritten)}${meter('Rows read (free plan: 5,000,000 per day)', u.total.rowsRead, u.limits.rowsRead)}<p class="small muted">Whole Cloudflare account, all ${u.databases.length} D1 databases, from Cloudflare analytics (the same source as the dashboard). Updated every minute; analytics can lag a few minutes behind.</p>`; return }
+  el.className = 'stack small'
+  el.innerHTML = `${hit}${u.error ? `<p class="pill warn" style="width:fit-content">${esc(u.error)}</p>` : ''}<p class="muted">${u.configured ? 'Cloudflare analytics did not answer.' : 'Live numbers are off. Add two Cloudflare Pages secrets, <code>CF_ACCOUNT_ID</code> and <code>CF_ANALYTICS_TOKEN</code> (token permission: Account Analytics, Read), then redeploy. SETUP.md, section "Usage meter", has the steps.'} The same numbers are on dash.cloudflare.com under Storage &amp; databases, D1 SQL Database, Usage.</p>`
 }
 
 boot().catch((e) => { $('#app').innerHTML = `<div class="center"><div class="stack"><h1>Could not load</h1><p class="muted">${esc(e.message)}</p></div></div>` })

@@ -255,3 +255,12 @@ video.demo { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r); backgro
 .part:hover{background:color-mix(in oklab,currentColor 6%,transparent)}
 .part input{margin-top:.2rem;accent-color:var(--accent,#c9a86a);width:1rem;height:1rem;flex:none}
 .part>span{display:grid;gap:.1rem}
+
+.quota-banner { position: sticky; top: 0; z-index: 95; display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: .75rem 1rem; background: var(--warn-soft); color: var(--text); border-bottom: 1px solid var(--warn); font-size: .9rem; line-height: 1.45; }
+.quota-banner[hidden] { display: none; }
+.quota-banner .quota-text { display: grid; gap: .15rem; max-width: 76ch; }
+.quota-banner b { color: var(--warn); font-weight: 600; }
+.quota-banner .quota-actions { display: flex; gap: .5rem; flex-shrink: 0; }
+.meter { display: grid; gap: .35rem; font-size: .88rem; }
+.meter.high .progress i { background: var(--warn); }
+.meter.full .progress i { background: var(--err); }
