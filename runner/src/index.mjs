@@ -41,7 +41,7 @@ async function call(path, body) {
 const ERR_RE = /(does not exist|not allowed|not authorized|keine Berechtigung|invalid|ungültig|is locked|gesperrt|error|fehler|not possible|cannot be|must be)/i
 const isErr = async (page) => page.evaluate(() => !!document.querySelector('[class*="MessageBar"][class*="rror"], [class*="sbar"] [class*="rror"], [class*="Msg"][class*="rror"] , [title="Error"], [aria-label="Error"]')).catch(() => false)
 
-const RETRYABLE = /Create button not found|Create > Project menu item not found|Project definition fields not found|Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
+const RETRYABLE = /Read-back differs|missing after Enter|already exists$|No free row for|Create button not found|Create > Project menu item not found|Project definition fields not found|Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
 
 class Job {
   constructor(job, plan, browser) {

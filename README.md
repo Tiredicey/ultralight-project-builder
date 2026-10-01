@@ -282,6 +282,39 @@ curl -fsSL https://raw.githubusercontent.com/Tiredicey/ultralight-project-builde
 
 After that, start a new run for LEARN-636 (Autopilot, tasks 1-14). Task 1 is skipped because P/2636 already exists.
 
+## Live test 2026-10-01: fresh LEARN-641, Autopilot, tasks 1-14
+
+**Result.** Run #25 finished with **84 of 84 steps verified, 0 failed, 0 skipped**, and all 9 required screenshots were stored.
+
+| Task | Read back from SAP |
+|---|---|
+| 1 | P/2641 created, profile DE01000. 6 WBS elements with PE, Acct, CA EU00 and cost centres |
+| 2 | 14 activities (duration, work, work centre, WBS). 0045 service lines 5,000.00. 0135 10,000 EUR on 6300000. Network 4000110 |
+| 3, 5 | Network graph: 16 activities. After the links: 11 distinct earliest-start dates |
+| 4 | 22 predecessor links in 2 saves |
+| 6 | PS text PH-641-1. Milestones 00004, 00005, 00006 with flags |
+| 10 | 0135 costs 8,000.00, flexible duration |
+| 11 | CN25 actual 35 h, remaining 45 h |
+| 12 | Actual 1,750.00 |
+| 13 | FB60 document 1900000068, supplier 114641, 9,700 EUR |
+| 14 | Actual 11,450.00, commitment 5,000.00, total 16,450.00, plan 49,433.14 |
+
+**Where the run stopped, and the fix for each.** The Oracle runner was still on **1.3.0**, so I cleared these stops on the live canvas. The code fixes ship in runner 1.3.1 and later.
+
+| Step | What happened on a fresh account | Fix |
+|---|---|---|
+| 1.2 | CJ20N opens a first-time "Welcome to the Project Builder" dialog, then "User-specific options" (hierarchy levels 2). The Create button was hidden behind them. | `projectBuilderWelcome`: tick "Skip this in future", Set options, set hierarchy levels to 99, Continue. Runs on every CJ20N open. |
+| 2.2 (1st) | SAP kept WBS P/2641 on activities 0020-0090 after one pass. | WBS assignment repeats up to 4 passes, pressing Enter every 4 cells, until all 14 rows read back. |
+| 2.2 (retry) | The retry re-entered rows in the same session: "0020 already exists". | Read-back and row errors now reopen the project and retry automatically before asking anyone. |
+
+**Not confirmed.**
+- The fixes have not yet run on the Oracle runner, which is still on 1.3.0.
+- The read-only Validate run for LEARN-641 could not start. The runner holds no password for LEARN-641 (job #26 was aborted while still queued).
+
+**To make the next account fully hands-off:**
+1. Update the runner once (`setup.sh`, below). From 1.3.1 on, it updates itself.
+2. Add `LEARN-641:<password>` (and any new account) to `SAP_ACCOUNTS` in `runner/.env`.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.
