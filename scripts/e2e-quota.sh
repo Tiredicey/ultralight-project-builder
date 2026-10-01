@@ -16,7 +16,7 @@ curl -s -c $T/o -H "$J" -d "{\"email\":\"$E\",\"name\":\"Owner\",\"password\":\"
 curl -s -c $T/o -H "$J" -d "{\"email\":\"$E\",\"password\":\"OwnerPass123!\"}" $B/auth/login >/dev/null
 OWN=$(DBQ "SELECT role v FROM users WHERE email='$E'")
 [ "$OWN" = owner ] || { O2=$(DBQ "SELECT email v FROM users WHERE role='owner'"); echo "note: owner is $O2; e2e needs a fresh local DB (rm -rf .wrangler/state)"; }
-curl -s -b $T/o -H "$J" -d '{"sapUser":"LEARN-640"}' $B/admin/accounts >/dev/null
+curl -s -b $T/o -H "$J" -d '{"sapUser":"LEARN-640, LEARN-641"}' $B/admin/accounts >/dev/null
 tok=$(curl -s -b $T/o -H "$J" -d '{"name":"quota"}' $B/admin/runners | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
 R() { curl -s -H "$J" -H "authorization: Bearer $tok" -H "x-runner-version: ${RV:-1.3.5}" -d "$2" $B/runner$1; }
 
@@ -59,7 +59,7 @@ r=$(curl -s -b $T/f $B/auth/me); ok "backup session recognised" $(has "$r" "$E")
 r=$(curl -s -b $T/f "$B/jobs?all=1"); ok "runs readable at the limit" $(has "$r" '"jobs"') "${r:0:160}"
 r=$(curl -s -b $T/f $B/admin/overview); ok "owner console readable at the limit" $(has "$r" '"users"') "${r:0:160}"
 r=$(curl -s -b $T/f "$B/jobs/$jid/frame?since=-1"); ok "live frame readable at the limit" $(has "$r" '"seq"') "${r:0:160}"
-r=$(curl -s -D $T/h2 -b $T/f -H "$J" -d '{"sapUser":"LEARN-640","tasks":[1]}' $B/jobs)
+r=$(curl -s -D $T/h2 -b $T/f -H "$J" -d '{"sapUser":"LEARN-641","tasks":[1]}' $B/jobs)
 ok "new run refused with code D1_WRITE_LIMIT" $(has "$r" 'D1_WRITE_LIMIT') "$r"
 ok "refusal is HTTP 503 with Retry-After" $(head -1 $T/h2 | grep -q 503 && grep -qi '^retry-after: [0-9]' $T/h2 && echo 1 || echo 0) "$(head -3 $T/h2)"
 ok "retryAt is the next 00:00 UTC" $(echo "$r" | python3 -c "

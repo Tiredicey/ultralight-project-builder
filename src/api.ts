@@ -138,7 +138,8 @@ const jobView = (job: any) => {
 }
 
 
-const recoverStale = async (c: Context<Env>) => {
+const recoverStale = (c: Context<Env>) => soft(recoverStaleNow(c))
+const recoverStaleNow = async (c: Context<Env>) => {
   const t = now()
   await c.env.DB.prepare("UPDATE jobs SET status = 'queued', runner_id = NULL WHERE status = 'claimed' AND started_at < ?").bind(t - 120000).run()
   const dead = (await c.env.DB.prepare("SELECT j.id FROM jobs j LEFT JOIN runners r ON r.id = j.runner_id WHERE j.status IN ('running', 'paused', 'waiting') AND (r.id IS NULL OR r.revoked = 1 OR r.last_seen < ?)").bind(t - 180000).all<{ id: number }>()).results
@@ -591,15 +592,17 @@ api.post('/runner/claim', async (c) => {
     const keep = live.length ? ` AND id NOT IN (${live.map(() => '?').join(',')})` : ''
     const lost = (await c.env.DB.prepare(`SELECT id FROM jobs WHERE runner_id = ? AND status IN ('claimed', 'running', 'paused', 'waiting')${keep}`).bind(r.id, ...live).all<{ id: number }>()).results
     for (const d of lost) {
-      await c.env.DB.prepare("UPDATE jobs SET status = 'failed', finished_at = ?, secret = NULL, prompt = NULL, result = ? WHERE id = ?").bind(now(), JSON.stringify({ summary: 'Runner restarted while this job was open; job closed so the SAP account is free. Start a new run to continue.' }), d.id).run()
-      await event(c, d.id, 'error', `Runner "${r.name}" restarted and no longer holds this job. Job closed; start a new run (finished tasks are skipped).`)
+      if (quotaNow()) break
+      await soft(c.env.DB.prepare("UPDATE jobs SET status = 'failed', finished_at = ?, secret = NULL, prompt = NULL, result = ? WHERE id = ?").bind(now(), JSON.stringify({ summary: 'Runner restarted while this job was open; job closed so the SAP account is free. Start a new run to continue.' }), d.id).run())
+      await soft(event(c, d.id, 'error', `Runner "${r.name}" restarted and no longer holds this job. Job closed; start a new run (finished tasks are skipped).`))
     }
   }
   const skip = busy.length ? ` AND sap_user NOT IN (${busy.map(() => '?').join(',')})` : ''
   const { results } = await c.env.DB.prepare(`SELECT * FROM jobs WHERE status = 'queued'${skip} ORDER BY id LIMIT 500`).bind(...busy).all<any>()
   const job = results.find((x) => (allowed.length === 0 || allowed.includes(x.sap_user)) && (only.length === 0 || only.includes(x.sap_user)) && !busy.includes(x.sap_user) && (local.includes(x.sap_user) || !!x.secret))
-  if (!job) return c.json({ job: null })
-  const upd = await c.env.DB.prepare("UPDATE jobs SET status = 'claimed', runner_id = ?, started_at = ? WHERE id = ? AND status = 'queued'").bind(r.id, now(), job.id).run()
+  if (!job) return c.json({ job: null, quota: quotaNow() })
+  const upd = await soft(c.env.DB.prepare("UPDATE jobs SET status = 'claimed', runner_id = ?, started_at = ? WHERE id = ? AND status = 'queued'").bind(r.id, now(), job.id).run())
+  if (!upd) return c.json({ job: null, quota: quotaNow() })
   if (!upd.meta.changes) return c.json({ job: null })
   const password = job.secret ? await open(secretOf(c), job.secret).catch(() => null) : null
   await c.env.DB.prepare('UPDATE jobs SET secret = NULL WHERE id = ?').bind(job.id).run()
