@@ -48,6 +48,8 @@ else echo "RAM ${MEM_MB} MB, swap ok"; fi
 say "3/7 Service user and code in $DIR"
 id "$RUN_USER" >/dev/null 2>&1 || need_sudo useradd --system --create-home --home-dir /home/$RUN_USER --shell /usr/sbin/nologin "$RUN_USER"
 need_sudo mkdir -p "$DIR" && need_sudo chown "$RUN_USER":"$RUN_USER" "$DIR"
+need_sudo git config --system --add safe.directory "$DIR" 2>/dev/null || true
+need_sudo chown -R "$RUN_USER":"$RUN_USER" "$DIR"
 if [ -d "$DIR/.git" ]; then need_sudo -u "$RUN_USER" git -C "$DIR" pull --ff-only
 else need_sudo -u "$RUN_USER" git clone --depth 1 "$REPO" "$DIR"; fi
 
@@ -59,7 +61,7 @@ need_sudo -u "$RUN_USER" env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH
 
 say "5/7 Configuration"
 ENV=$DIR/runner/.env
-if [ -f "$ENV" ] && [ "${RECONFIGURE:-0}" != 1 ]; then echo "keeping existing $ENV (RECONFIGURE=1 to change it)"
+if [ -f "$ENV" ] && [ "${RECONFIGURE:-0}" != 1 ]; then need_sudo chown "$RUN_USER":"$RUN_USER" "$ENV" && need_sudo chmod 600 "$ENV"; echo "keeping existing $ENV (RECONFIGURE=1 to change it)"
 else
   exec 3</dev/tty
   read -r -u 3 -p "Control site URL [https://ultralight-project-builder.pages.dev]: " CONTROL_URL

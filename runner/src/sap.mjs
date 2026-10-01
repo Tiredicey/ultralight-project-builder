@@ -120,7 +120,7 @@ export async function clickTitle(page, names) {
 }
 
 export async function headerValues(page) {
-  return page.evaluate(() => [...document.querySelectorAll('input')].filter((e) => { const r = e.getBoundingClientRect(); return r.top > 100 && r.top < 200 && r.width > 20 && r.left > 300 }).map((e) => e.value.trim()))
+  return page.evaluate(() => [...document.querySelectorAll('input')].filter((e) => { const r = e.getBoundingClientRect(); return r.top > 100 && r.top < 280 && r.width > 20 && r.left > 300 && !/\[\d+,\d+\]/.test(e.id) }).map((e) => e.value.trim()))
 }
 
 export async function openProjectFromWorklist(page, project) {

@@ -2,6 +2,7 @@
 // A = mrss table rows (LEARN-626/653), B = tree#Cnnn#row#col buttons with a TECH_KEY column (LEARN-636, job 23).
 import { chromium } from 'playwright'
 import { treeRows, selectTreeObject, pickTreeRow } from '../src/sap.mjs'
+import { overviewNode } from '../src/recipes.mjs'
 
 const rowsB = [
   ['Project Definition', 'Development of Ultralight Bike 636 (I)', 'P/2636', 0],
@@ -41,6 +42,15 @@ const sel = await selectTreeObject(pg, { ident: 'P/2636', level: 1 })
 ok(sel.ok && sel.network === '4000200', 'B: selectTreeObject clicks row, header verified, network read', JSON.stringify({ ok: sel.ok, r: sel.reason, n: sel.network }))
 const sel2 = await selectTreeObject(pg, { act: '0020' })
 ok(sel2.ok, 'B: selectTreeObject on activity 0020', sel2.reason || sel2.header?.join('/'))
+
+const rowsC = rowsB.filter(([k]) => !/Network/.test(k))
+await pg.setContent(pageB.replace(/<div id="tree"[\s\S]*?<\/div>\n<div style="position:absolute;top:900px/, `<div id="tree" style="position:absolute;top:220px;left:40px;width:350px">${rowsC.map(([k, t, id, lv], i) => `<div style="height:25px;position:relative"><span role="button" id="tree#C109#${i + 1}#ni" title="${k}" style="position:absolute;left:${lv * 16}px;width:20px;height:22px;display:inline-block"></span><span role="button" id="tree#C109#${i + 1}#1#          1#i" style="position:absolute;left:${lv * 16 + 24}px;height:22px;display:inline-block" onclick="document.getElementById('h1').value='${id}'">${t}</span><span role="button" id="tree#C109#${i + 1}#2#TECH_KEY#i" style="position:absolute;left:390px;height:22px;display:inline-block">${id}</span></div>`).join('')}</div>\n<div style="position:absolute;top:900px`))
+const ctxC = { page: pg, vars: { project: 'P/2636' } }
+const nodeC = overviewNode(ctxC, {})
+ok(nodeC.ident === 'P/2636' && nodeC.level === 1, 'C (job 27 frame): no network in tree, step without project arg falls back to opened project', JSON.stringify(nodeC))
+const selC = await selectTreeObject(pg, nodeC)
+ok(selC.ok && selC.hit.kind === 'WBS Element', 'C: top WBS selected for Activity Overview', selC.reason || selC.hit?.kind)
+ok(overviewNode({ vars: { network: '4000200', project: 'P/2636' } }, {}).ident === '4000200', 'C: network preferred when known')
 
 await pg.setContent(pageA)
 const ra = await treeRows(pg)

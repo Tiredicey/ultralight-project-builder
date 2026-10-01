@@ -98,7 +98,7 @@ export const TASKS = [
       S({ op: 'shot', name: 't2-activity-overview', caption: 'Task 2: Activity Overview, activities 0010 to 0140 with duration, work, work centre and WBS' }),
       S({ op: 'save', label: 'Save activities', expect: 'saved|being changed|changed' }),
       S({ op: 'openProject', project: d.project, label: `Reopen ${d.project}` }),
-      S({ op: 'recipe', name: 'extService', args: { act: d.external.act, desc: d.external.desc, lines: d.external.lines }, label: `External activity ${d.external.act} with service lines 10 and 20`, values: { Activity: '0045', Description: d.external.desc, 'Line 10': 'Engineering 1 EA 2000', 'Line 20': 'Ext. production 1 EA 3000' } }),
+      S({ op: 'recipe', name: 'extService', args: { project: d.project, act: d.external.act, desc: d.external.desc, lines: d.external.lines }, label: `External activity ${d.external.act} with service lines 10 and 20`, values: { Activity: '0045', Description: d.external.desc, 'Line 10': 'Engineering 1 EA 2000', 'Line 20': 'Ext. production 1 EA 3000' } }),
       S({ op: 'recipe', name: 'primaryCost', args: { project: d.project, act: d.primCost.act, desc: d.primCost.desc, amount: d.primCost.amount, costElem: d.primCost.costElem }, label: `Primary cost ${d.primCost.act} ${d.primCost.amount} EUR on ${d.primCost.costElem}`, values: { Activity: d.primCost.act, Description: d.primCost.desc, Amount: d.primCost.amount, 'Cost Elem.': d.primCost.costElem } }),
       S({ op: 'save', label: 'Save project', expect: 'saved|changed' })
     ]

@@ -315,6 +315,32 @@ After that, start a new run for LEARN-636 (Autopilot, tasks 1-14). Task 1 is ski
 1. Update the runner once (`setup.sh`, below). From 1.3.1 on, it updates itself.
 2. Add `LEARN-641:<password>` (and any new account) to `SAP_ACCOUNTS` in `runner/.env`.
 
+## Session 2026-10-01 (later): LEARN-636 run #27 stuck at step 2.6, runner 1.3.2
+
+**What happened (job #27 events, Oracle journal, last live frame):**
+
+| Time (UTC) | Event | Source |
+|---|---|---|
+| 05:47 | 2.2 `Tree object P/2636 not found`. Runner was still 1.3.0 | journal |
+| 06:42 | 2.2 marked done by operator | job 27 events |
+| 06:42, 06:47 | 2.6 `Tree object undefined not found`, twice | job 27 events |
+| 08:27-08:31 | Runner restarted onto 1.3.1, crash-looped 14 times on `EACCES /opt/ultralight/runner/.env`, then started | journal |
+| now | Job #27 still shows `waiting` with no runner holding it. The last frame shows SAP "Session has timed out" | `/api/jobs/27`, `/frame` |
+
+**Causes and fixes**
+
+| Problem | Cause | Fix | Where |
+|---|---|---|---|
+| 2.6 `Tree object undefined` | `extService` looked up `ctx.vars.network || s.network`. The step has no `network` arg, and the P/2636 tree shows no network node (the frame has 7 rows: project definition plus 6 WBS) | One `overviewNode` helper for activities, 0045 and 0135: network if known, else top WBS of the opened project. A network lookup that fails falls back to the top WBS. The task pack now passes `project` to `extService` | `runner/src/recipes.mjs`, `shared/pack.js` |
+| Stale network across projects | `vars.network` was kept when a reopened project had no network | `openProject` stores `vars.project` and clears `vars.network` when the tree has none | `runner/src/index.mjs` |
+| Header check read grid cells | `headerValues` took every input between 100 and 200 px. On the 1920x1200 frame the header sits at y=196 | Range is 100 to 280 px, grid cells (`[r,c]` ids) excluded | `runner/src/sap.mjs` |
+| Job left `waiting` forever after a runner restart | The runner kept polling, so the 3-minute silence rule never fired | The runner sends the job ids it holds on every claim. The site closes jobs assigned to that runner which it no longer holds, so the account is freed. Runners older than 1.3.2 do not send the list and are left as before | `src/api.ts` `/runner/claim`, `runner/src/index.mjs` |
+| Self-update could not run, service crash-looped | `/opt/ultralight` and `.env` were owned by `ubuntu`; the service runs as `ultralight` | `setup.sh` takes ownership of the checkout, re-applies `600` and owner on an existing `.env`, adds `safe.directory` | `deploy/oracle/setup.sh` |
+
+**Tests (sandbox):** `runner/dev/treecheck.mjs` 13/13 (new case C is built from the job #27 frame: no network row, Activity Overview falls back to the top WBS). `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22. Claim cleanup checked against wrangler dev: the job is kept while listed, kept for a runner that sends no list, and closed when the list is empty. A new job for the freed account is accepted.
+
+**Not confirmed:** a live LEARN-636 run on 1.3.2. The runner holds passwords for LEARN-626 and LEARN-653 only (`/api/me/readiness`, `accountsWithPassword`). No LEARN-636 SAP password was supplied, so a new run needs it entered on the Launch page or added to `SAP_ACCOUNTS`.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.

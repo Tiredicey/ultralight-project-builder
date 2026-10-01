@@ -289,9 +289,10 @@ class Job {
       this.lockTries = 0
       const title = await p.title()
       if (!title.includes(s.project)) return { ok: false, reason: `${s.project} not open, title is "${title}"` }
+      this.rctx.vars.project = s.project
       await expandProjectTree(p)
       const net = (await treeRows(p)).map((r) => r.ident.match(/^(\d{5,})$/)).find(Boolean)
-      if (net) this.rctx.vars.network = net[1]
+      if (net) this.rctx.vars.network = net[1]; else delete this.rctx.vars.network
       this.rctx.dirty = false
       return { ok: true, note: `${s.project} open${net ? `, network ${net[1]}` : ''}`, readback: title }
     }
@@ -464,14 +465,16 @@ async function main() {
   setInterval(hello, 5 * 60 * 1000)
   let idle = 0
   const active = new Map()
+  const jobIds = new Map()
   for (;;) {
     try {
       if (active.size < MAX_JOBS) {
-        const r = await call('/claim', { accounts: Object.keys(LOCAL), only: ONLY, busy: [...active.keys()] })
+        const r = await call('/claim', { accounts: Object.keys(LOCAL), only: ONLY, busy: [...active.keys()], active: [...jobIds.values()] })
         if (r.job) {
           idle = 0
           log(`Job #${r.job.id} ${r.job.sapUser} tasks ${r.job.tasks.join(',')} (${r.plan.steps.length} steps), slot ${active.size + 1}/${MAX_JOBS}`)
-          const run = new Job(r.job, r.plan, browser).start().catch((e) => log('ERROR job', r.job.id, e.message)).finally(() => active.delete(r.job.sapUser))
+          jobIds.set(r.job.sapUser, r.job.id)
+          const run = new Job(r.job, r.plan, browser).start().catch((e) => log('ERROR job', r.job.id, e.message)).finally(() => { active.delete(r.job.sapUser); jobIds.delete(r.job.sapUser) })
           active.set(r.job.sapUser, run)
           if (MAX_JOBS === 1) await run
           continue

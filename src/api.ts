@@ -13,7 +13,7 @@ const SESSION_DAYS = 14
 const FRAME_MAX = 1_800_000
 const EVIDENCE_MAX = 1_900_000
 const ACTIVE = ['queued', 'claimed', 'running', 'paused', 'waiting']
-export const RUNNER_LATEST = '1.3.1'
+export const RUNNER_LATEST = '1.3.2'
 const DOC_CHUNK = 900_000
 const DOC_MAX = 20 * 1024 * 1024
 
@@ -493,6 +493,15 @@ api.post('/runner/claim', async (c) => {
   const only = (Array.isArray(b.only) ? b.only : []).map((s: string) => String(s).toUpperCase())
   const busy = (Array.isArray(b.busy) ? b.busy : []).map((s: string) => String(s).toUpperCase())
   await recoverStale(c)
+  if (Array.isArray(b.active)) {
+    const live = b.active.map((x: any) => Number(x)).filter((x: number) => Number.isFinite(x))
+    const keep = live.length ? ` AND id NOT IN (${live.map(() => '?').join(',')})` : ''
+    const lost = (await c.env.DB.prepare(`SELECT id FROM jobs WHERE runner_id = ? AND status IN ('claimed', 'running', 'paused', 'waiting')${keep}`).bind(r.id, ...live).all<{ id: number }>()).results
+    for (const d of lost) {
+      await c.env.DB.prepare("UPDATE jobs SET status = 'failed', finished_at = ?, secret = NULL, prompt = NULL, result = ? WHERE id = ?").bind(now(), JSON.stringify({ summary: 'Runner restarted while this job was open; job closed so the SAP account is free. Start a new run to continue.' }), d.id).run()
+      await event(c, d.id, 'error', `Runner "${r.name}" restarted and no longer holds this job. Job closed; start a new run (finished tasks are skipped).`)
+    }
+  }
   const skip = busy.length ? ` AND sap_user NOT IN (${busy.map(() => '?').join(',')})` : ''
   const { results } = await c.env.DB.prepare(`SELECT * FROM jobs WHERE status = 'queued'${skip} ORDER BY id LIMIT 500`).bind(...busy).all<any>()
   const job = results.find((x) => (allowed.length === 0 || allowed.includes(x.sap_user)) && (only.length === 0 || only.includes(x.sap_user)) && !busy.includes(x.sap_user) && (local.includes(x.sap_user) || !!x.secret))

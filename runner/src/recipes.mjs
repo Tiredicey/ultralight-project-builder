@@ -43,8 +43,12 @@ async function setCheck(page, gridId, row, col, want) {
 
 const checkboxes = (page) => page.evaluate(() => [...document.querySelectorAll('[role=checkbox]')].map((e) => { const r = e.getBoundingClientRect(); return { t: (e.getAttribute('title') || e.getAttribute('aria-label') || '').trim(), ck: e.getAttribute('aria-checked') === 'true', x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width } }).filter((o) => o.w > 0 && o.x > 300))
 
+export const overviewNode = (ctx, s) => ctx.vars.network ? { ident: ctx.vars.network } : { ident: s.project || ctx.vars.project, level: 1 }
+
 async function openOverview(ctx, sel, titles) {
-  const r = await selectTreeObject(ctx.page, sel)
+  if (!sel.ident && !sel.act && !sel.text) return { ok: false, reason: 'No project or network known for the Activity Overview; reopen the project first' }
+  let r = await selectTreeObject(ctx.page, sel)
+  if (!r.ok && sel.ident && sel.ident === ctx.vars.network && ctx.vars.project) r = await selectTreeObject(ctx.page, { ident: ctx.vars.project, level: 1 })
   if (!r.ok) return r
   if (r.network) ctx.vars.network = r.network
   const b = await clickTitle(ctx.page, titles)
@@ -246,7 +250,7 @@ export async function reportMatrix(page) {
 
 export async function extService(ctx, s) {
   const p = ctx.page
-  const o = await openOverview(ctx, { ident: ctx.vars.network || s.network }, ['Activity Overview'])
+  const o = await openOverview(ctx, overviewNode(ctx, s), ['Activity Overview'])
   if (!o.ok) return o
   if (!(await clickTab(p, ['Ext. Processing', 'External Processing']))) return { ok: false, reason: 'External processing tab not found' }
   const g = await gridWithHeader(p, /Purch|Info Rec/i)
@@ -403,8 +407,7 @@ export async function wbsElements(ctx, s) {
 
 export async function activities(ctx, s) {
   const p = ctx.page
-  const node = ctx.vars.network ? { ident: ctx.vars.network } : { ident: s.project, level: 1 }
-  const o = await openOverview(ctx, node, ['Activity Overview'])
+  const o = await openOverview(ctx, overviewNode(ctx, s), ['Activity Overview'])
   if (!o.ok) return o
   await clickTab(p, ['Int. Processing', 'Internal Processing'])
   const f = await gridByField(p, 'AFVGD-LTXA1')
@@ -449,7 +452,7 @@ export async function activities(ctx, s) {
 
 export async function primaryCost(ctx, s) {
   const p = ctx.page
-  const o = await openOverview(ctx, ctx.vars.network ? { ident: ctx.vars.network } : { ident: s.project, level: 1 }, ['Activity Overview'])
+  const o = await openOverview(ctx, overviewNode(ctx, s), ['Activity Overview'])
   if (!o.ok) return o
   if (!(await clickTab(p, ['Prim. Costs', 'Primary Costs']))) return { ok: false, reason: 'Prim. Costs tab not found' }
   const g = await gridWithHeader(p, /^Cost Element$/i)
