@@ -224,7 +224,8 @@ The exported .docx now contains only the screenshots with their captions, the co
 **Include all** turns everything on, **Clean default** turns everything off. The conclusion variant picker on the page still works: it changes the text, and the variant line only goes into the file if you switch that option on.
 
 **Checked (sandbox, LEARN-636 data, Node with stubbed image loading):** default export had 0 tables and none of the variant line, "not captured" or "Note:" text; with all options on it had 9 tables and all three texts. python-docx opened both files.
-**Not confirmed:** I did not run this against the live site or open the files in Microsoft Word. The new code is not live until the site is redeployed.
+**Live site (2026-10-01, LEARN-636):** the default export gave `IT2406_PT1_LEARN-636_P2636.docx` (0.9 MB) with 6 screenshots, 0 tables, no variant line and no missing-screenshot notes. With **Include all** it had 9 tables, the variant line and the notes. The setting stayed at 0 of 7 after a page reload. There were 0 script errors after the `extras.js` fix: the Run pack add-on used to write into `#xPick` after you had already left that page.
+**Not confirmed:** opening the files in Microsoft Word itself (only checked with python-docx).
 
 ## Interface (2026-09-30, final design pass)
 
