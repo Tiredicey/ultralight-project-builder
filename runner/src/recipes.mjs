@@ -427,8 +427,19 @@ export async function activities(ctx, s) {
     for (const [k, v] of [['desc', a.desc], ['dur', a.dur], ['work', a.work], ['wc', a.wc]]) if (num((await cellState(p, G, r, c[k]))?.v) !== num(v) && norm((await cellState(p, G, r, c[k]))?.v) !== v) await putCell(p, G, r, c[k], v)
   }
   await p.keyboard.press('Enter'); await settle(p, 2500)
-  for (const a of s.rows) { const r = await rowOf(a.act); if (r == null) return { ok: false, reason: `${a.act} missing after Enter` }; if (norm((await cellState(p, G, r, c.wbs))?.v) !== a.wbs) { await show(r); await putCell(p, G, r, c.wbs, a.wbs) } }
-  await p.keyboard.press('Enter'); await settle(p, 2500)
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = 0
+    for (const a of s.rows) {
+      const r = await rowOf(a.act)
+      if (r == null) return { ok: false, reason: `${a.act} missing after Enter` }
+      if (norm((await cellState(p, G, r, c.wbs))?.v) === a.wbs) continue
+      await p.evaluate((id) => document.getElementById(id)?.scrollIntoView({ block: 'center', inline: 'center' }), `${G}[${r},${c.wbs}]_c`); await sleep(400)
+      await putCell(p, G, r, c.wbs, a.wbs); changed++
+      if (changed % 4 === 0) { await p.keyboard.press('Enter'); await settle(p, 2000) }
+    }
+    if (!changed) break
+    await p.keyboard.press('Enter'); await settle(p, 2500)
+  }
   const bad = []
   for (const a of s.rows) { const r = await rowOf(a.act); const got = [norm((await cellState(p, G, r, c.desc))?.v), num((await cellState(p, G, r, c.dur))?.v), num((await cellState(p, G, r, c.work))?.v), norm((await cellState(p, G, r, c.wc))?.v), norm((await cellState(p, G, r, c.wbs))?.v)]; if (got[0] !== a.desc || got[1] !== a.dur || got[2].replace(/\.0$/, '') !== a.work || got[3] !== a.wc || got[4] !== a.wbs) bad.push(`${a.act}: ${got.join('|')}`) }
   if (bad.length) return { ok: false, reason: `Read-back differs: ${bad.slice(0, 4).join('; ')}` }
