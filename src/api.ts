@@ -1,10 +1,10 @@
 import { Hono, type Context, type Next } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
-import { now, randomToken, sha256, hashPassword, verifyPassword, emailOk } from './lib/auth'
+import { now, randomToken, sha256, hashPassword, verifyPassword, emailOk, safeEqual } from './lib/auth'
 import { seal, open } from './lib/crypto'
 import { planFor, taskSummary, suffixOf, dataFor, taskSheet, validatePlan, SAP_CLIENT, SAP_HOST } from '../shared/pack.js'
 
-export type Bindings = { DB: D1Database; APP_SECRET?: string; SETUP_KEY?: string }
+export type Bindings = { DB: D1Database; APP_SECRET?: string; SETUP_KEY?: string; CF_ACCOUNT_ID?: string; CF_ANALYTICS_TOKEN?: string; SIMULATE_D1_WRITE_LIMIT?: string }
 type User = { id: number; email: string; name: string; role: string; status: string }
 type Runner = { id: number; name: string; accounts: string }
 type Env = { Bindings: Bindings; Variables: { user: User; runner: Runner } }
@@ -13,18 +13,38 @@ const SESSION_DAYS = 14
 const FRAME_MAX = 1_800_000
 const EVIDENCE_MAX = 1_900_000
 const ACTIVE = ['queued', 'claimed', 'running', 'paused', 'waiting']
-export const RUNNER_LATEST = '1.3.4'
+export const RUNNER_LATEST = '1.3.5'
+const ONLINE_MS = 75_000
+const HEARTBEAT_MS = 30_000
+const WATCH_MS = 45_000
+const WATCH_WRITE_MS = 20_000
+const FALLBACK_HOURS = 12
+const QUOTA_RE = /exceeded D1's free tier daily row (write|read) limit/i
+export const quotaKind = (e: unknown) => { const m = QUOTA_RE.exec(String((e as any)?.message || e || '')); return m ? (m[1].toLowerCase() as 'write' | 'read') : null }
+export const nextUtcMidnight = (t = Date.now()) => { const d = new Date(t); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) }
+let quotaSeen: { kind: string; at: number; retryAt: number } | null = null
+const noteQuota = (kind: string) => { quotaSeen = { kind, at: now(), retryAt: nextUtcMidnight() } }
+const quotaNow = () => (quotaSeen && quotaSeen.retryAt > now() ? quotaSeen : null)
+const soft = async <T>(p: Promise<T>): Promise<T | null> => { try { return await p } catch (e) { const k = quotaKind(e); if (k) { noteQuota(k); return null } throw e } }
 const DOC_CHUNK = 900_000
 const DOC_MAX = 20 * 1024 * 1024
 
 let ensured = false
+let hasWatch = false
+const LATE_TABLES: Record<string, string> = {
+  runner_info: 'CREATE TABLE IF NOT EXISTS runner_info (runner_id INTEGER PRIMARY KEY, info TEXT NOT NULL, updated_at INTEGER NOT NULL)',
+  docs: "CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, size INTEGER NOT NULL, chunks INTEGER NOT NULL, task_pages TEXT NOT NULL DEFAULT '{}', complete INTEGER NOT NULL DEFAULT 0, uploaded_by INTEGER, created_at INTEGER NOT NULL)",
+  doc_chunks: 'CREATE TABLE IF NOT EXISTS doc_chunks (doc_id INTEGER NOT NULL, idx INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (doc_id, idx))'
+}
 const ensureSchema = async (c: Context<Env>) => {
   if (ensured) return
-  await c.env.DB.batch([
-    c.env.DB.prepare('CREATE TABLE IF NOT EXISTS runner_info (runner_id INTEGER PRIMARY KEY, info TEXT NOT NULL, updated_at INTEGER NOT NULL)'),
-    c.env.DB.prepare("CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, size INTEGER NOT NULL, chunks INTEGER NOT NULL, task_pages TEXT NOT NULL DEFAULT '{}', complete INTEGER NOT NULL DEFAULT 0, uploaded_by INTEGER, created_at INTEGER NOT NULL)"),
-    c.env.DB.prepare('CREATE TABLE IF NOT EXISTS doc_chunks (doc_id INTEGER NOT NULL, idx INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (doc_id, idx))')
-  ])
+  const names = Object.keys(LATE_TABLES)
+  const have = new Set((await c.env.DB.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${names.map(() => '?').join(',')})`).bind(...names).all<{ name: string }>()).results.map((r) => r.name))
+  const missing = names.filter((t) => !have.has(t))
+  if (missing.length && !(await soft(c.env.DB.batch(missing.map((t) => c.env.DB.prepare(LATE_TABLES[t])))))) return
+  const watch = await c.env.DB.prepare("SELECT COUNT(*) n FROM pragma_table_info('jobs') WHERE name = 'watched_at'").first<{ n: number }>()
+  if (!watch?.n && !(await soft(c.env.DB.prepare('ALTER TABLE jobs ADD COLUMN watched_at INTEGER').run()))) return
+  hasWatch = true
   ensured = true
 }
 const planOf = (sapUser: string, tasks: number[], mode: string) => (mode === 'validate' ? validatePlan(sapUser, tasks) : planFor(sapUser, tasks))
@@ -33,7 +53,7 @@ const secretOf = (c: Context<Env>) => c.env.APP_SECRET || 'local-dev-secret-chan
 const j = <T>(s: string | null | undefined, d: T): T => { try { return s ? JSON.parse(s) : d } catch { return d } }
 
 const audit = (c: Context<Env>, userId: number | null, action: string, detail?: unknown) =>
-  c.env.DB.prepare('INSERT INTO audit (user_id, action, detail, created_at) VALUES (?, ?, ?, ?)').bind(userId, action, detail ? JSON.stringify(detail) : null, now()).run()
+  soft(c.env.DB.prepare('INSERT INTO audit (user_id, action, detail, created_at) VALUES (?, ?, ?, ?)').bind(userId, action, detail ? JSON.stringify(detail) : null, now()).run())
 
 const event = (c: Context<Env>, jobId: number, level: string, message: string, stepKey?: string | null, data?: unknown) =>
   c.env.DB.prepare('INSERT INTO events (job_id, step_key, level, message, data, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(jobId, stepKey || null, level, message.slice(0, 2000), data ? JSON.stringify(data).slice(0, 20000) : null, now()).run()
@@ -42,9 +62,29 @@ const setting = async (c: Context<Env>, key: string, d: string) => ((await c.env
 
 const publicUser = (u: User) => ({ id: u.id, email: u.email, name: u.name, role: u.role, status: u.status })
 
+const enc = new TextEncoder()
+const b64url = (buf: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+const hmac = async (secret: string, msg: string) => {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return b64url(await crypto.subtle.sign('HMAC', key, enc.encode(msg)))
+}
+const fallbackToken = async (c: Context<Env>, id: number, passHash: string) => {
+  const exp = now() + FALLBACK_HOURS * 36e5
+  return `f1.${id}.${exp}.${await hmac(secretOf(c), `${id}.${exp}.${passHash}`)}`
+}
+const loadFallback = async (c: Context<Env>, token: string): Promise<User | null> => {
+  const [, id, exp, sig] = token.split('.')
+  if (!id || !exp || !sig || !(Number(exp) > now())) return null
+  const u = await c.env.DB.prepare('SELECT id, email, name, role, status, pass_hash FROM users WHERE id = ?').bind(Number(id)).first<User & { pass_hash: string }>()
+  if (!u || !safeEqual(await hmac(secretOf(c), `${id}.${exp}.${u.pass_hash}`), sig)) return null
+  const { pass_hash, ...user } = u
+  return user
+}
+
 const loadUser = async (c: Context<Env>): Promise<User | null> => {
   const token = getCookie(c, 'uc_session') || (c.req.header('authorization') || '').replace(/^Bearer\s+/i, '')
   if (!token) return null
+  if (token.startsWith('f1.')) return loadFallback(c, token)
   const row = await c.env.DB.prepare('SELECT u.id, u.email, u.name, u.role, u.status, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?').bind(await sha256(token)).first<User & { expires_at: number }>()
   if (!row || row.expires_at < now()) return null
   return row
@@ -70,14 +110,18 @@ const needRunner = async (c: Context<Env>, next: Next) => {
   const r = await c.env.DB.prepare('SELECT id, name, accounts FROM runners WHERE token_hash = ? AND revoked = 0').bind(await sha256(token)).first<Runner>()
   if (!r) return c.json({ error: 'Runner token invalid or revoked' }, 401)
   c.set('runner', r)
-  await c.env.DB.prepare('UPDATE runners SET last_seen = ?, version = COALESCE(?, version) WHERE id = ?').bind(now(), c.req.header('x-runner-version') || null, r.id).run()
+  const v = c.req.header('x-runner-version') || null
+  await soft(c.env.DB.prepare('UPDATE runners SET last_seen = ?, version = COALESCE(?, version) WHERE id = ? AND (last_seen IS NULL OR last_seen < ? OR (? IS NOT NULL AND version IS NOT ?))').bind(now(), v, r.id, now() - HEARTBEAT_MS, v, v).run())
   await next()
 }
 
-const startSession = async (c: Context<Env>, userId: number) => {
+const startSession = async (c: Context<Env>, userId: number, passHash: string) => {
   const token = randomToken(32)
-  await c.env.DB.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').bind(await sha256(token), userId, now(), now() + SESSION_DAYS * 864e5).run()
-  setCookie(c, 'uc_session', token, { httpOnly: true, secure: new URL(c.req.url).protocol === 'https:', sameSite: 'Lax', path: '/', maxAge: SESSION_DAYS * 86400 })
+  const secure = new URL(c.req.url).protocol === 'https:'
+  const stored = await soft(c.env.DB.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').bind(await sha256(token), userId, now(), now() + SESSION_DAYS * 864e5).run())
+  if (stored) { setCookie(c, 'uc_session', token, { httpOnly: true, secure, sameSite: 'Lax', path: '/', maxAge: SESSION_DAYS * 86400 }); return 'stored' }
+  setCookie(c, 'uc_session', await fallbackToken(c, userId, passHash), { httpOnly: true, secure, sameSite: 'Lax', path: '/', maxAge: FALLBACK_HOURS * 3600 })
+  return 'fallback'
 }
 
 const jobFor = async (c: Context<Env>, id: number) => {
@@ -89,7 +133,7 @@ const jobFor = async (c: Context<Env>, id: number) => {
 }
 
 const jobView = (job: any) => {
-  const { secret, ...rest } = job
+  const { secret, watched_at, ...rest } = job
   return { ...rest, tasks: j(job.tasks, []), prompt: j(job.prompt, null), result: j(job.result, null), hasSecret: !!secret }
 }
 
@@ -106,12 +150,34 @@ const recoverStale = async (c: Context<Env>) => {
 
 export const api = new Hono<Env>()
 
-api.onError((err, c) => { console.error('API error', c.req.method, c.req.path, err.message); return c.json({ error: err.message || 'Server error' }, 500) })
-api.use('*', async (c, next) => { await ensureSchema(c); await next() })
+api.onError((err, c) => {
+  const kind = quotaKind(err)
+  if (kind) {
+    noteQuota(kind)
+    const retryAt = nextUtcMidnight()
+    c.header('Retry-After', String(Math.max(60, Math.ceil((retryAt - now()) / 1000))))
+    return c.json({ error: kind === 'write' ? 'The free database write allowance for today is used up. Viewing still works; saving resumes at 00:00 UTC.' : 'The free database read allowance for today is used up. The site resumes at 00:00 UTC.', code: kind === 'write' ? 'D1_WRITE_LIMIT' : 'D1_READ_LIMIT', retryAt }, 503)
+  }
+  console.error('API error', c.req.method, c.req.path, err.message)
+  return c.json({ error: err.message || 'Server error' }, 500)
+})
+
+const WRITE_SQL = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i
+const LIMIT_MSG = "D1_ERROR: Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue."
+const simulated = (db: D1Database): D1Database => {
+  const fail = () => Promise.reject(new Error(LIMIT_MSG))
+  const wrap = (sql: string, st: any): any => new Proxy(st, { get: (t, k) => (k === 'bind' ? (...a: unknown[]) => wrap(sql, t.bind(...a)) : k === 'run' && WRITE_SQL.test(sql) ? fail : k === '__sql' ? sql : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) })
+  return new Proxy(db, { get: (t: any, k) => (k === 'prepare' ? (sql: string) => wrap(sql, t.prepare(sql)) : k === 'batch' ? (list: any[]) => (list.some((x) => WRITE_SQL.test(x.__sql || '')) ? fail() : t.batch(list)) : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) })
+}
+api.use('*', async (c, next) => {
+  if (c.env.SIMULATE_D1_WRITE_LIMIT === '1' && ['localhost', '127.0.0.1'].includes(new URL(c.req.url).hostname)) c.env = { ...c.env, DB: simulated(c.env.DB) }
+  await ensureSchema(c)
+  await next()
+})
 
 api.get('/health', async (c) => {
   const users = await c.env.DB.prepare('SELECT COUNT(*) n FROM users').first<{ n: number }>()
-  return c.json({ ok: true, sap: { host: SAP_HOST, client: SAP_CLIENT }, initialized: (users?.n || 0) > 0, setupKeyRequired: !!c.env.SETUP_KEY, time: now() })
+  return c.json({ ok: true, sap: { host: SAP_HOST, client: SAP_CLIENT }, initialized: (users?.n || 0) > 0, setupKeyRequired: !!c.env.SETUP_KEY, time: now(), quota: quotaNow() })
 })
 
 api.post('/auth/register', async (c) => {
@@ -133,7 +199,7 @@ api.post('/auth/register', async (c) => {
     .bind(email, name, hash, salt, first ? 'owner' : 'user', first ? 'approved' : 'pending', String(b.note || '').slice(0, 300) || null, now(), first ? now() : null).run()
   const id = Number(r.meta.last_row_id)
   await audit(c, id, first ? 'owner.bootstrap' : 'user.register', { email })
-  await startSession(c, id)
+  await startSession(c, id, hash)
   return c.json({ user: { id, email, name, role: first ? 'owner' : 'user', status: first ? 'approved' : 'pending' } })
 })
 
@@ -142,14 +208,14 @@ api.post('/auth/login', async (c) => {
   const email = String(b.email || '').trim().toLowerCase()
   const u = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first<any>()
   if (!u || !(await verifyPassword(String(b.password || ''), u.pass_hash, u.pass_salt))) return c.json({ error: 'Email or password is wrong' }, 401)
-  await startSession(c, u.id)
+  const session = await startSession(c, u.id, u.pass_hash)
   await audit(c, u.id, 'user.login')
-  return c.json({ user: publicUser(u) })
+  return c.json({ user: publicUser(u), session, ...(session === 'fallback' ? { notice: `Signed in with a ${FALLBACK_HOURS}-hour backup session because today's free database write allowance is used up. Viewing works; saving resumes at 00:00 UTC.`, retryAt: nextUtcMidnight() } : {}) })
 })
 
 api.post('/auth/logout', async (c) => {
   const token = getCookie(c, 'uc_session')
-  if (token) await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(await sha256(token)).run()
+  if (token && !token.startsWith('f1.')) await soft(c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(await sha256(token)).run())
   deleteCookie(c, 'uc_session', { path: '/' })
   return c.json({ ok: true })
 })
@@ -175,7 +241,7 @@ api.get('/me/accounts', async (c) => {
     : c.env.DB.prepare('SELECT a.* FROM sap_accounts a JOIN grants g ON g.account_id = a.id WHERE g.user_id = ? ORDER BY a.sap_user').bind(u.id)
   const { results } = await q.all<any>()
   const runners = (await c.env.DB.prepare('SELECT id, name, accounts, last_seen FROM runners WHERE revoked = 0').all<any>()).results
-  const online = runners.filter((r) => r.last_seen && now() - r.last_seen < 30000)
+  const online = runners.filter((r) => r.last_seen && now() - r.last_seen < ONLINE_MS)
   return c.json({
     accounts: results.map((a) => ({ ...a, suffix: suffixOf(a.sap_user), project: suffixOf(a.sap_user) ? dataFor(suffixOf(a.sap_user)!).project : null, runnerOnline: online.some((r) => { const acc = j<string[]>(r.accounts, []); return acc.length === 0 || acc.includes(a.sap_user) }) })),
     runnersOnline: online.length
@@ -197,7 +263,7 @@ api.get('/me/readiness', async (c) => {
     : c.env.DB.prepare('SELECT a.* FROM sap_accounts a JOIN grants g ON g.account_id = a.id WHERE g.user_id = ? ORDER BY a.sap_user').bind(u.id)
   const accounts = (await q.all<any>()).results
   const runners = (await c.env.DB.prepare('SELECT r.id, r.name, r.accounts, r.version, r.last_seen, i.info, i.updated_at FROM runners r LEFT JOIN runner_info i ON i.runner_id = r.id WHERE r.revoked = 0 ORDER BY r.id DESC').all<any>()).results
-    .map((r) => ({ id: r.id, name: r.name, accounts: j<string[]>(r.accounts, []), version: r.version, online: !!r.last_seen && now() - r.last_seen < 30000, lastSeen: r.last_seen, info: j<any>(r.info, null), infoAt: r.updated_at }))
+    .map((r) => ({ id: r.id, name: r.name, accounts: j<string[]>(r.accounts, []), version: r.version, online: !!r.last_seen && now() - r.last_seen < ONLINE_MS, lastSeen: r.last_seen, info: j<any>(r.info, null), infoAt: r.updated_at }))
   const runs = (await (priv
     ? c.env.DB.prepare("SELECT * FROM jobs WHERE status IN ('done', 'failed', 'aborted') ORDER BY id DESC LIMIT 200")
     : c.env.DB.prepare("SELECT * FROM jobs WHERE user_id = ? AND status IN ('done', 'failed', 'aborted') ORDER BY id DESC LIMIT 200").bind(u.id)).all<any>()).results
@@ -294,7 +360,7 @@ api.post('/jobs', async (c) => {
     const pw = !!secret || (info.accountsWithPassword || []).includes(sapUser)
     return (!lim.length || lim.includes(sapUser)) && (!only.length || only.includes(sapUser)) && pw
   })
-  const online = able.filter((r) => r.last_seen && now() - r.last_seen < 30000)
+  const online = able.filter((r) => r.last_seen && now() - r.last_seen < ONLINE_MS)
   const warning = !able.length
     ? `No runner can take ${sapUser}: every runner is limited to other accounts or holds no password for it. Enter the SAP password here, or add ${sapUser} to a runner's SAP_ACCOUNTS / limit.`
     : !online.length ? `A runner can take ${sapUser} but none is online right now. The job waits in the queue until one connects.` : null
@@ -322,6 +388,7 @@ api.get('/jobs/:id/frame', async (c) => {
   const job = await jobFor(c, Number(c.req.param('id')))
   if (!job) return c.json({ error: 'Not found' }, 404)
   const since = Number(c.req.query('since') || -1)
+  if (hasWatch && ACTIVE.includes(job.status) && !(job.watched_at > now() - WATCH_WRITE_MS)) await soft(c.env.DB.prepare('UPDATE jobs SET watched_at = ? WHERE id = ? AND (watched_at IS NULL OR watched_at < ?)').bind(now(), job.id, now() - WATCH_WRITE_MS).run())
   const f = await c.env.DB.prepare('SELECT seq, width, height, image, dom, url, title, statusbar, updated_at FROM frames WHERE job_id = ?').bind(job.id).first<any>()
   if (!f) return c.body(null, 204)
   if (f.seq <= since) return c.body(null, 204)
@@ -361,7 +428,7 @@ api.get('/admin/overview', async (c) => {
   const users = (await c.env.DB.prepare(`SELECT id, email, name, role, status, note, created_at, decided_at FROM users ORDER BY status = 'pending' DESC, created_at DESC`).all<any>()).results
   const accounts = (await c.env.DB.prepare('SELECT * FROM sap_accounts ORDER BY sap_user').all<any>()).results
   const grants = (await c.env.DB.prepare('SELECT * FROM grants').all<any>()).results
-  const runners = (await c.env.DB.prepare('SELECT id, name, accounts, version, last_seen, revoked, created_at FROM runners ORDER BY id DESC').all<any>()).results.map((r) => ({ ...r, accounts: j(r.accounts, []), online: !!r.last_seen && now() - r.last_seen < 30000 }))
+  const runners = (await c.env.DB.prepare('SELECT id, name, accounts, version, last_seen, revoked, created_at FROM runners ORDER BY id DESC').all<any>()).results.map((r) => ({ ...r, accounts: j(r.accounts, []), online: !!r.last_seen && now() - r.last_seen < ONLINE_MS }))
   const auditRows = (await c.env.DB.prepare('SELECT a.*, u.email FROM audit a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 80').all<any>()).results
   return c.json({ users, accounts, grants, runners, audit: auditRows, registration: await setting(c, 'registration', 'open') })
 })
@@ -434,6 +501,29 @@ api.delete('/admin/runners/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+const USAGE_LIMITS = { rowsWritten: 100_000, rowsRead: 5_000_000 }
+let usageCache: { at: number; body: any } | null = null
+api.get('/admin/usage', async (c) => {
+  const day = new Date().toISOString().slice(0, 10)
+  const base = { day, resetsAt: nextUtcMidnight(), limits: USAGE_LIMITS, quota: quotaNow() }
+  if (!c.env.CF_ACCOUNT_ID || !c.env.CF_ANALYTICS_TOKEN) return c.json({ ...base, configured: false })
+  if (usageCache && now() - usageCache.at < 60_000 && usageCache.body.day === day) return c.json({ ...usageCache.body, quota: quotaNow() })
+  const query = 'query($a: string!, $d: Date!) { viewer { accounts(filter: { accountTag: $a }) { d1AnalyticsAdaptiveGroups(limit: 100, filter: { date_geq: $d, date_leq: $d }) { sum { rowsRead rowsWritten } dimensions { databaseId } } } } }'
+  let data: any = {}, status = 0
+  try {
+    const res = await fetch('https://api.cloudflare.com/client/v4/graphql', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${c.env.CF_ANALYTICS_TOKEN}` }, body: JSON.stringify({ query, variables: { a: c.env.CF_ACCOUNT_ID, d: day } }) })
+    status = res.status
+    data = await res.json().catch(() => ({}))
+  } catch (e: any) { data = { errors: [{ message: e.message }] } }
+  if (status !== 200 || data.errors?.length) return c.json({ ...base, configured: true, error: data.errors?.[0]?.message || `Cloudflare analytics HTTP ${status}` })
+  const groups = data.data?.viewer?.accounts?.[0]?.d1AnalyticsAdaptiveGroups || []
+  const databases = groups.map((g: any) => ({ id: g.dimensions?.databaseId, rowsRead: g.sum?.rowsRead || 0, rowsWritten: g.sum?.rowsWritten || 0 })).sort((x: any, y: any) => y.rowsWritten - x.rowsWritten)
+  const total = databases.reduce((t: any, g: any) => ({ rowsRead: t.rowsRead + g.rowsRead, rowsWritten: t.rowsWritten + g.rowsWritten }), { rowsRead: 0, rowsWritten: 0 })
+  const body = { ...base, configured: true, source: 'cloudflare-graphql', total, databases }
+  usageCache = { at: now(), body }
+  return c.json(body)
+})
+
 api.post('/admin/settings', async (c) => {
   const b = await c.req.json().catch(() => ({}))
   if (b.registration && ['open', 'closed'].includes(b.registration)) await c.env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('registration', b.registration).run()
@@ -481,8 +571,11 @@ api.delete('/admin/docs/:id', async (c) => {
 api.post('/runner/hello', async (c) => {
   const r = c.get('runner')
   const b = await c.req.json().catch(() => ({}))
-  if (b.info && !b.info.doctor) await c.env.DB.prepare('INSERT INTO runner_info (runner_id, info, updated_at) VALUES (?, ?, ?) ON CONFLICT(runner_id) DO UPDATE SET info = excluded.info, updated_at = excluded.updated_at').bind(r.id, JSON.stringify(b.info).slice(0, 8000), now()).run()
-  return c.json({ ok: true, name: r.name, accounts: j<string[]>(r.accounts, []), latest: RUNNER_LATEST })
+  if (b.info && !b.info.doctor) {
+    const info = { ...b.info, sap: b.info.sap && Number.isFinite(b.info.sap.ms) ? { ...b.info.sap, ms: Math.round(b.info.sap.ms / 500) * 500 } : b.info.sap }
+    await soft(c.env.DB.prepare('INSERT INTO runner_info (runner_id, info, updated_at) VALUES (?, ?, ?) ON CONFLICT(runner_id) DO UPDATE SET info = excluded.info, updated_at = excluded.updated_at WHERE runner_info.info IS NOT excluded.info OR runner_info.updated_at < ?').bind(r.id, JSON.stringify(info).slice(0, 8000), now(), now() - 6 * 36e5).run())
+  }
+  return c.json({ ok: true, name: r.name, accounts: j<string[]>(r.accounts, []), latest: RUNNER_LATEST, quota: quotaNow() })
 })
 
 api.post('/runner/claim', async (c) => {
@@ -525,15 +618,25 @@ api.post('/runner/jobs/:id/state', async (c) => {
   const b = await c.req.json().catch(() => ({}))
   const status = ['running', 'paused', 'waiting', 'done', 'failed', 'aborted'].includes(b.status) ? b.status : job.status
   const final = ['done', 'failed', 'aborted'].includes(status)
-  await c.env.DB.prepare('UPDATE jobs SET status = ?, step_idx = COALESCE(?, step_idx), prompt = ?, result = COALESCE(?, result), finished_at = CASE WHEN ? THEN ? ELSE finished_at END WHERE id = ?')
-    .bind(status, Number.isFinite(b.stepIdx) ? b.stepIdx : null, b.prompt ? JSON.stringify(b.prompt) : null, b.result ? JSON.stringify(b.result) : null, final ? 1 : 0, now(), job.id).run()
-  if (Array.isArray(b.events) && b.events.length) {
+  const stepIdx = Number.isFinite(b.stepIdx) ? b.stepIdx : job.step_idx
+  const prompt = b.prompt ? JSON.stringify(b.prompt) : null
+  const result = b.result ? JSON.stringify(b.result) : job.result
+  const writes: D1PreparedStatement[] = []
+  if (status !== job.status || stepIdx !== job.step_idx || prompt !== job.prompt || result !== job.result)
+    writes.push(c.env.DB.prepare('UPDATE jobs SET status = ?, step_idx = ?, prompt = ?, result = ?, finished_at = CASE WHEN ? AND finished_at IS NULL THEN ? ELSE finished_at END WHERE id = ?').bind(status, stepIdx, prompt, result, final ? 1 : 0, now(), job.id))
+  const events = Array.isArray(b.events) ? b.events.slice(0, 50) : []
+  if (events.length) {
     const stmt = c.env.DB.prepare('INSERT INTO events (job_id, step_key, level, message, data, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    await c.env.DB.batch(b.events.slice(0, 50).map((e: any) => stmt.bind(job.id, e.stepKey || null, ['info', 'ok', 'warn', 'error', 'dom'].includes(e.level) ? e.level : 'info', String(e.message || '').slice(0, 2000), e.data ? JSON.stringify(e.data).slice(0, 20000) : null, now())))
+    writes.push(...events.map((e: any) => stmt.bind(job.id, e.stepKey || null, ['info', 'ok', 'warn', 'error', 'dom'].includes(e.level) ? e.level : 'info', String(e.message || '').slice(0, 2000), e.data ? JSON.stringify(e.data).slice(0, 20000) : null, now())))
   }
+  const acking = Array.isArray(b.ack)
+  const ack = acking ? b.ack.map(Number).filter(Number.isFinite).slice(0, 90) : []
+  if (ack.length) writes.push(c.env.DB.prepare(`UPDATE commands SET status = 'delivered' WHERE job_id = ? AND status = 'pending' AND id IN (${ack.map(() => '?').join(',')})`).bind(job.id, ...ack))
+  const stored = writes.length ? !!(await soft(c.env.DB.batch(writes))) : true
+  if (!stored && !acking) throw new Error(LIMIT_MSG)
   const cmds = (await c.env.DB.prepare("SELECT id, type, payload FROM commands WHERE job_id = ? AND status = 'pending' ORDER BY id LIMIT 60").bind(job.id).all<any>()).results
-  if (cmds.length) await c.env.DB.prepare(`UPDATE commands SET status = 'delivered' WHERE id IN (${cmds.map(() => '?').join(',')})`).bind(...cmds.map((x) => x.id)).run()
-  return c.json({ commands: cmds.map((x) => ({ id: x.id, type: x.type, ...j(x.payload, {}) })) })
+  if (!acking && cmds.length) await soft(c.env.DB.prepare(`UPDATE commands SET status = 'delivered' WHERE id IN (${cmds.map(() => '?').join(',')})`).bind(...cmds.map((x) => x.id)).run())
+  return c.json({ commands: cmds.map((x) => ({ id: x.id, type: x.type, ...j(x.payload, {}) })), stored, watched: !hasWatch || job.watched_at > now() - WATCH_MS, quota: stored ? null : quotaNow() })
 })
 
 api.post('/runner/jobs/:id/frame', async (c) => {
@@ -541,10 +644,12 @@ api.post('/runner/jobs/:id/frame', async (c) => {
   if (!job) return c.json({ error: 'Not your job' }, 404)
   const b = await c.req.json().catch(() => ({}))
   if (!b.image || String(b.image).length > FRAME_MAX) return c.json({ error: 'Frame missing or too large' }, 413)
+  const watched = !hasWatch || job.watched_at > now() - WATCH_MS
+  if (!watched && !b.final && ACTIVE.includes(job.status)) return c.json({ ok: true, stored: false, watched })
   const dom = b.dom ? JSON.stringify(b.dom).slice(0, 180000) : null
   await c.env.DB.prepare('INSERT INTO frames (job_id, seq, width, height, image, dom, url, title, statusbar, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET seq = excluded.seq, width = excluded.width, height = excluded.height, image = excluded.image, dom = excluded.dom, url = excluded.url, title = excluded.title, statusbar = excluded.statusbar, updated_at = excluded.updated_at')
     .bind(job.id, Number(b.seq) || 0, Number(b.width) || 0, Number(b.height) || 0, b.image, dom, String(b.url || '').replace(/sap-password=[^&]*/gi, ''), String(b.title || '').slice(0, 200), String(b.statusbar || '').slice(0, 500), now()).run()
-  return c.json({ ok: true })
+  return c.json({ ok: true, stored: true, watched })
 })
 
 api.post('/runner/jobs/:id/evidence', async (c) => {
