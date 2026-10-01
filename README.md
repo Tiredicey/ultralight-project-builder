@@ -45,12 +45,12 @@ Cloudflare Workers cannot run a browser, so the runner must be a PC, VM or CI bo
 | `GET /api/me/sheet/:sapUser` | approved | Task sheet: values and how-to-check per task |
 | `GET /api/me/readiness` | approved | Runners (host details owner-only), accounts, last validate result per task |
 | `GET /api/me/docs`, `GET /api/me/docs/:id/:idx` | approved | Uploaded task PDF metadata and chunks |
-| `/api/admin/*` | owner/admin | Users, grants, accounts, runner tokens, settings, audit, `POST/PUT/DELETE /admin/docs` |
+| `/api/admin/*` | owner/admin | Users, grants, accounts, runner tokens, settings, audit, `GET /admin/usage` (D1 rows today), `POST/PUT/DELETE /admin/docs` |
 | `/api/runner/*` | runner token | Hello (self-report), claim, state and command sync, frames, evidence |
 
 ## Data (D1)
 
-`users`, `sessions`, `sap_accounts`, `grants`, `runners`, `jobs`, `events`, `frames` (one live frame per job), `commands`, `evidence`, `settings`, `audit`, `runner_info`, `docs`, `doc_chunks`. Schema in `migrations/0001_init.sql` and `0002_docs_runner_info.sql`. The API also creates the 0002 tables on first request (`CREATE TABLE IF NOT EXISTS`), so a deploy that skipped the migration still works.
+`users`, `sessions`, `sap_accounts`, `grants`, `runners`, `jobs` (with `watched_at`, added on first request), `events`, `frames` (one live frame per job), `commands`, `evidence`, `settings`, `audit`, `runner_info`, `docs`, `doc_chunks`. Schema in `migrations/0001_init.sql` and `0002_docs_runner_info.sql`. The API also creates the 0002 tables on first request (`CREATE TABLE IF NOT EXISTS`), so a deploy that skipped the migration still works.
 
 ## Updating to this version
 
@@ -448,6 +448,48 @@ GitHub reported 3 CodeQL alerts and 6 Dependabot alerts on `main`.
 **Regression after the fixes:** `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22, `npm run check`, `runner/dev/treecheck.mjs` all pass, `runner/dev/extrascheck.mjs` 80/80. Live SAP: Task 1 on LEARN-636 skipped creation correctly, and `npm run validate` logged in.
 
 **Not confirmed:** the alerts closing on GitHub. The sandbox token cannot read the code-scanning or Dependabot APIs (HTTP 403), so I could not watch them close. They close by themselves when CodeQL and Dependabot rescan this commit.
+
+## D1 free-tier write limit: cause, fix, fallback (2026-10-01, runner 1.3.5)
+
+**What happened.** On 2026-10-01 the site answered every sign-in and save with `D1_ERROR: Your account has exceeded D1's free tier daily row write limit`. The Cloudflare dashboard showed 107.36k of 100k rows written for the day (screenshot from the owner). The free plan allows 100,000 rows written and 5,000,000 rows read per day, account-wide, reset at 00:00 UTC (source: developers.cloudflare.com/d1/platform/pricing, read 2026-10-01). Upgrading to Workers Paid ($5/month) lifts the cap to 50 million rows a month (same page).
+
+**Where the writes came from** (read from `src/api.ts` and `runner/src/index.mjs` at 1.3.4, and from the Oracle runner journal):
+
+| Source | Old behaviour | Rows per hour, one job running |
+|---|---|---|
+| Runner heartbeat (`needRunner`) | `UPDATE runners` on **every** runner request | ~6,000 (sync 1/s + frames up to 2/s + claim) |
+| Job state sync | `UPDATE jobs` every second even when nothing changed | ~3,600 |
+| Live frame | Upsert every 0.45-1.5 s, even with nobody watching | ~2,400-8,000 |
+| Command delivery | `UPDATE commands` per delivered batch | small |
+| Runner self-report | Rewritten every 5 min (SAP ping time always differs) | 12 |
+
+An idle runner (no job) still wrote ~1,200 rows/hour from claim polls. Job #33 on LEARN-636 ran from 12:35 UTC and the limit was hit by 14:43 UTC. After that the runner journal shows **4,675** failed `WARN sync` lines today, one or two per second, each retry also counting against the limit.
+
+**What changed.**
+
+| Change | Effect |
+|---|---|
+| Heartbeat written at most every 30 s, or when the version changes; "online" means seen in the last 75 s | ~6,000 → 120 rows/hour |
+| Job row updated only when status, step, prompt or result actually changed | idle sync writes 0 rows |
+| Frames stored only while someone has the canvas open (`jobs.watched_at`, refreshed at most every 20 s by the viewer); first and last frame always stored | 0 rows when nobody watches |
+| Runner self-report stored only when it changed (SAP ping rounded to 500 ms) or every 6 h | 12 → ~0 rows/hour |
+| Commands acknowledged by id (`ack`) in the next sync; redelivered until acknowledged; runner ignores duplicates | no lost or doubled clicks at the limit |
+| Schema check reads `sqlite_master` instead of running `CREATE TABLE IF NOT EXISTS` on every cold start | no DDL writes per isolate |
+
+**Fallbacks when the limit is reached anyway.**
+
+- **Sign-in still works.** If the session row cannot be stored, the site issues a 12-hour backup session: an HttpOnly cookie signed with HMAC-SHA256 over the user id, expiry and the stored password hash, using `APP_SECRET`. Changing the password invalidates it. Forged tokens are rejected.
+- **Reading still works.** Runs, evidence, live frames, task sheet, project data, Readiness and Owner console load normally (reads have their own 5 million/day allowance).
+- **Clear message instead of a raw error.** Every refused write returns HTTP 503 with `code: D1_WRITE_LIMIT`, `retryAt` (next 00:00 UTC) and `Retry-After`. The browser shows a banner with a countdown in local time.
+- **Runner 1.3.5 backs off.** It keeps working in SAP, keeps up to 600 unsent log lines (drops `info` lines first), polls every 30 s while idle and every 2.5-6 s during a job, and sends the kept lines as soon as a write is accepted again. Runners still on 1.3.4 get a 503 so they keep their lines too.
+- **Usage meter.** Owner console > Database allowance today shows rows written and read against the free limits, from Cloudflare's GraphQL analytics (`d1AnalyticsAdaptiveGroups`). It needs two optional secrets, see SETUP.md "Usage meter".
+
+**Tests (sandbox, wrangler 4 + local D1).** `scripts/e2e-quota.sh` **26/26**. It checks heartbeat throttling, unchanged self-report, zero-write idle sync, frames only while watched, command redelivery and acknowledgement, then restarts the site with a simulated write limit (`--binding SIMULATE_D1_WRITE_LIMIT=1`, honoured only on localhost) and checks backup sign-in, reads, the 503 refusal with `retryAt` at 00:00 UTC, runner 1.3.5 and 1.3.4 behaviour, forged-token rejection and sign-out, then that the backup session survives once writes reopen. Runner buffer logic was run against the same simulated limit: 2/2 lines kept and the pause command applied once at the limit; both lines delivered and backoff cleared after. `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22, `npm run check` pass.
+
+**Not confirmed.**
+- The row-per-hour figures are computed from the code's polling intervals, not measured from Cloudflare analytics. Measuring needs the `CF_ANALYTICS_TOKEN` secret (or the dashboard after a day of use).
+- The live site could not be tested at the real limit after the fix: today's allowance was already used up and resets at 00:00 UTC 2026-10-02.
+- Whether the other three databases on the account (`gawk-capstone-sti-lipa-db`, `radartrack`, `radar`) used part of today's writes. The dashboard screenshot shows they ran 79, 8 and 0 queries, so `ultralight-builder-production` (289.13k queries) is almost certainly the main source, but per-database write counts were not visible.
 
 ## Stack
 
