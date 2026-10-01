@@ -1,11 +1,15 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput, recoverSession } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
 import { Checker } from './checks.mjs'
 import { loadEnv, localAccounts } from './env.mjs'
 import { VERSION } from './version.mjs'
 import { hostname, cpus, totalmem } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
 const escRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const toRe = (v) => (v instanceof RegExp ? v : new RegExp(String(v), 'i'))
@@ -37,6 +41,8 @@ async function call(path, body) {
 const ERR_RE = /(does not exist|not allowed|not authorized|keine Berechtigung|invalid|ungültig|is locked|gesperrt|error|fehler|not possible|cannot be|must be)/i
 const isErr = async (page) => page.evaluate(() => !!document.querySelector('[class*="MessageBar"][class*="rror"], [class*="sbar"] [class*="rror"], [class*="Msg"][class*="rror"] , [title="Error"], [aria-label="Error"]')).catch(() => false)
 
+const RETRYABLE = /Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
+
 class Job {
   constructor(job, plan, browser) {
     this.job = job; this.plan = plan; this.browser = browser
@@ -45,6 +51,7 @@ class Job {
     this.stepOnce = false; this.aborted = false; this.seq = 0; this.lastHash = ''; this.lastFrameAt = 0; this.activeAt = Date.now(); this.target = null
     this.ctx = { host: SAP_HOST, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '' }
     this.results = { ok: 0, failed: 0, manual: 0, skipped: 0 }
+    this.autoTries = {}
     this.rctx = { page: null, vars: {}, dirty: false, sap: { host: SAP_HOST, client: SAP_CLIENT } }
   }
 
@@ -67,11 +74,24 @@ class Job {
         else if (!r.ok) { this.ev('error', r.reason, 'login'); await this.handoff({ title: 'Login failed', instruction: `${r.reason}. Log in on the canvas or abort.`, error: r.reason }, 'login') }
         else this.ev('ok', `Logged in as ${this.ctx.user} on ${SAP_HOST} client ${SAP_CLIENT}`, 'login', { statusbar: await statusbar(this.page) })
       }
+      this.secret = this.ctx.password
       this.ctx.password = ''
       while (this.idx < this.steps.length && !this.aborted) {
         await this.gate()
         if (this.aborted) break
-        const s = this.steps[this.idx]
+        let s = this.steps[this.idx]
+        if (this.waited) {
+          this.waited = false
+          const rc = await recoverSession(this.page, { ...this.ctx, password: this.secret }).catch(() => ({ ok: true, notes: [] }))
+          const back = this.reopenFor(s)
+          const proj = back != null ? this.steps[back].project : null
+          const moved = proj && !(await this.page.title().catch(() => '')).includes(proj)
+          if (rc.notes.length) this.ev('warn', rc.notes.join('. '), s.key)
+          if ((rc.notes.length || moved) && back != null && back < this.idx) {
+            this.ev('info', `Screen changed while paused; reopening ${proj} from step ${this.steps[back].key} before continuing`, s.key)
+            this.results.ok = Math.max(0, this.results.ok - (this.idx - back)); this.idx = back; s = this.steps[back]
+          }
+        }
         const out = await this.exec(s).catch((e) => ({ ok: false, reason: e.message }))
         if (this.aborted) break
         if (out.redo) continue
@@ -83,6 +103,18 @@ class Job {
         else if (out.skipped) { this.results.skipped++; this.ev('warn', `Skipped: ${out.reason || s.label}`, s.key); this.idx++ }
         else if (out.soft) { this.results.failed++; this.ev('error', out.reason, s.key); this.idx++ }
         else {
+          const tries = (this.autoTries[s.key] || 0)
+          if (tries < 2) {
+            const rc = await recoverSession(this.page, { ...this.ctx, password: this.secret }).catch(() => ({ ok: false, notes: [] }))
+            const again = rc.notes.length > 0 || (tries === 0 && RETRYABLE.test(out.reason || ''))
+            if (again && rc.ok !== false) {
+              this.autoTries[s.key] = tries + 1
+              this.ev('warn', `${out.reason || 'Step failed'}. ${rc.notes.join('. ') || 'Reopening and retrying once automatically'}`, s.key)
+              const back = this.reopenFor(s)
+              if (back != null) { this.results.ok = Math.max(0, this.results.ok - (this.idx - back)); this.idx = back }
+              continue
+            }
+          }
           this.ev('error', out.reason || 'Step failed', s.key, { statusbar: await statusbar(this.page), popup: await popupText(this.page) })
           const d = await this.handoff({ title: `Step ${s.key} needs you`, instruction: `${s.label}. Automation could not finish this. Fix it on the canvas and press Done, or retry.`, error: out.reason, values: s.values || valuesOf(s) }, s.key)
           if (d === 'retry') continue
@@ -158,6 +190,11 @@ class Job {
     } catch (e) { this.ev('warn', `Command ${c.type} failed: ${e.message}`) }
   }
 
+  reopenFor(s) {
+    for (let i = this.idx - 1; i >= 0 && this.steps[i].task === s.task; i--) if (this.steps[i].op === 'openProject') return i
+    return null
+  }
+
   decide(d) { const r = this.resolver; this.resolver = null; this.prompt = null; if (r) r(d) }
 
   async handoff(prompt, stepKey) {
@@ -166,6 +203,7 @@ class Job {
     await this.flush('waiting')
     const d = await new Promise((r) => { this.resolver = r })
     this.paused = false
+    this.waited = true
     await this.flush('running')
     return d
   }
@@ -174,6 +212,7 @@ class Job {
     if (!this.paused) return
     await this.flush('paused')
     while (this.paused && !this.aborted) await sleep(300)
+    this.waited = true
     if (!this.aborted) await this.flush('running')
   }
 
@@ -383,6 +422,30 @@ const valuesOf = (s) => {
 }
 
 const STARTED = Date.now()
+const RUNNER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO_DIR = join(RUNNER_DIR, '..')
+const SUPERVISED = !!(process.env.INVOCATION_ID || process.env.pm_id || process.env.RUNNER_SUPERVISED)
+const AUTO_UPDATE = process.env.AUTO_UPDATE !== 'false'
+const newer = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0) } return false }
+let updateTriedAt = 0
+
+function selfUpdate(latest) {
+  if (!AUTO_UPDATE || !newer(latest, VERSION) || Date.now() - updateTriedAt < 30 * 60 * 1000) return false
+  updateTriedAt = Date.now()
+  if (!existsSync(join(REPO_DIR, '.git'))) { log(`NOTE runner ${latest} is available; this copy is not a git checkout, update it by hand`); return false }
+  try {
+    const lock = () => { try { return readFileSync(join(RUNNER_DIR, 'package-lock.json'), 'utf8') } catch { return '' } }
+    const before = lock()
+    log(`Updating runner ${VERSION} -> ${latest}: git pull`)
+    execFileSync('git', ['-C', REPO_DIR, 'pull', '--ff-only'], { stdio: 'inherit', timeout: 120000 })
+    if (lock() !== before) execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: RUNNER_DIR, stdio: 'inherit', timeout: 600000 })
+    const now = (readFileSync(join(RUNNER_DIR, 'src', 'version.mjs'), 'utf8').match(/'([\d.]+)'/) || [])[1]
+    if (now === VERSION) { log('Update pulled nothing new; staying on', VERSION); return false }
+    if (!SUPERVISED) { log(`Runner ${now} downloaded. Restart this process (npm start) to use it.`); return false }
+    log(`Runner ${now} installed, restarting`)
+    return true
+  } catch (e) { log('WARN auto-update failed:', e.message); return false }
+}
 
 async function main() {
   log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'} · ${MAX_JOBS} parallel job(s)`)
@@ -393,10 +456,11 @@ async function main() {
     try { const t = Date.now(); const r = await fetch(webgui(SAP_HOST, SAP_CLIENT), { redirect: 'manual', signal: AbortSignal.timeout(15000) }); sap = { ok: r.status < 500, status: r.status, ms: Date.now() - t } } catch (e) { sap = { ok: false, error: e.message } }
     const info = { version: VERSION, host: hostname(), platform: `${process.platform}/${process.arch}`, node: process.version, cpus: cpus().length, memMb: Math.round(totalmem() / 1048576), chromium: browser.version(), headless: HEADLESS, accounts: Object.keys(LOCAL), accountsWithPassword: Object.entries(LOCAL).filter(([, p]) => p).map(([u]) => u), sapHost: SAP_HOST, sapClient: SAP_CLIENT, sap, startedAt: STARTED, maxJobs: MAX_JOBS, only: ONLY }
     const r = await call('/hello', { info }).catch((e) => { log('WARN hello', e.message); return null })
-    if (r?.latest && r.latest !== VERSION && !hello.warned) { hello.warned = true; log(`NOTE site expects runner ${r.latest}, this is ${VERSION}. git pull && npm install`) }
+    if (r?.latest && r.latest !== VERSION && !hello.warned) { hello.warned = true; log(`NOTE site expects runner ${r.latest}, this is ${VERSION}${AUTO_UPDATE ? '; will update itself when idle' : '. git pull && npm install'}`) }
+    hello.latest = r?.latest || hello.latest
   }
   await hello()
-  setInterval(hello, 10 * 60 * 1000)
+  setInterval(hello, 5 * 60 * 1000)
   let idle = 0
   const active = new Map()
   for (;;) {
@@ -414,6 +478,7 @@ async function main() {
         if (++idle % 60 === 1) log(`Waiting for jobs${ONLY.length ? ` (only ${ONLY.join(', ')})` : ''}`)
       }
     } catch (e) { log('WARN', e.message) }
+    if (!active.size && hello.latest && selfUpdate(hello.latest)) { await browser.close().catch(() => {}); process.exit(0) }
     await sleep(3000)
   }
 }

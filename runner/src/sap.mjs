@@ -143,7 +143,45 @@ export async function openProjectFromWorklist(page, project) {
   return (await page.title()).includes(project)
 }
 
+async function altTreeRows(page) {
+  return page.evaluate(() => {
+    const els = [...document.querySelectorAll('[id^="tree#"]')]
+    const by = new Map()
+    for (const e of els) {
+      const m = e.id.match(/^tree#(C\d+)#(\d+)#(.*)$/)
+      if (!m) continue
+      const key = `${m[1]}#${m[2]}`
+      const o = by.get(key) || { pre: `tree#${m[1]}`, row: m[2], cols: [] }
+      const r = e.getBoundingClientRect()
+      const txt = (e.getAttribute('title') || e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim()
+      if (m[3] === 'ni') { o.kind = txt; o.ix = r.left }
+      else o.cols.push({ id: e.id, tech: /TECH_KEY/i.test(m[3]), txt, x: r.left })
+      by.set(key, o)
+    }
+    const rows = [...by.values()].filter((o) => o.kind != null && o.cols.length)
+    const ctl = new Map()
+    for (const o of rows) { const c = o.pre; if (!ctl.has(c)) ctl.set(c, []); ctl.get(c).push(o) }
+    const proj = [...ctl.values()].find((list) => list.some((o) => /Project Definition|WBS Element|Network/i.test(o.kind))) || []
+    const xs = [...new Set(proj.map((o) => Math.round(o.ix ?? 0)))].sort((a, b) => a - b)
+    let net = ''
+    return proj.sort((a, b) => +a.row - +b.row).map((o) => {
+      const tech = o.cols.find((c) => c.tech)
+      const text = o.cols.filter((c) => !c.tech).sort((a, b) => a.x - b.x)[0]
+      let ident = tech ? tech.txt : ''
+      if (/Network header/i.test(o.kind) && /^\d{5,}$/.test(ident)) net = ident
+      if (/Network Activity|Activity/i.test(o.kind) && !/WBS/i.test(o.kind) && /^\d{4}$/.test(ident) && net) ident = `${net} ${ident}`
+      return { pre: o.pre, row: o.row, iidx: o.row, alt: true, sel: text ? text.id : tech?.id, kind: o.kind, lv: String(Math.max(0, xs.indexOf(Math.round(o.ix ?? 0)))), text: text ? text.txt : '', ident }
+    })
+  })
+}
+
 export async function expandProjectTree(page) {
+  const alt = await page.evaluate(() => !document.querySelector('tr[id*="mrss-cont-none-Row"]') && !!document.querySelector('[id^="tree#"]')).catch(() => false)
+  if (alt) {
+    const btn = await page.evaluate(() => { const e = [...document.querySelectorAll('[title="Expand All"]')].map((x) => ({ x, r: x.getBoundingClientRect() })).filter(({ r }) => r.width > 0 && r.top > 100 && r.left < 500).sort((a, b) => a.r.top - b.r.top)[0]; return e ? { x: e.r.left + e.r.width / 2, y: e.r.top + e.r.height / 2 } : null }).catch(() => null)
+    if (btn) { await page.mouse.click(btn.x, btn.y); await settle(page, 1200); return 1 }
+    return 0
+  }
   let clicks = 0
   for (let i = 0; i < 60; i++) {
     const ex = await page.evaluate(() => {
@@ -165,6 +203,23 @@ export async function expandProjectTree(page) {
 }
 
 export async function treeRows(page) {
+  const main = await mrssTreeRows(page)
+  if (main.some((r) => r.ident)) return main
+  const alt = await altTreeRows(page).catch(() => [])
+  return alt.some((r) => r.ident || r.text) ? alt : main
+}
+
+export function pickTreeRow(rows, { ident, act, text, level }) {
+  const match = (r) => (ident ? r.ident === ident : act ? new RegExp(`^(\\d{5,} )?${act}$`).test(r.ident) && (!r.alt || !/WBS|Project Definition/i.test(r.kind || '')) : r.text.includes(text))
+  const exact = rows.find((r) => match(r) && (level == null || r.lv === String(level)))
+  if (exact || level == null) return exact
+  const same = rows.filter(match)
+  if (!same.length) return undefined
+  if (level === 0) return same.find((r) => /Project Definition/i.test(r.kind || '')) || same[0]
+  return same.find((r) => r.kind ? !/Project Definition/i.test(r.kind) : false) || same[Math.min(level, same.length - 1)]
+}
+
+async function mrssTreeRows(page) {
   return page.evaluate(() => {
     const L = [...document.querySelectorAll('tr[id*="mrss-cont-left-Row"]')]
     const R = [...document.querySelectorAll('tr[id*="mrss-cont-none-Row"]')]
@@ -175,9 +230,10 @@ export async function treeRows(page) {
 export async function selectTreeObject(page, { ident, act, text, level }) {
   await expandProjectTree(page)
   const rows = await treeRows(page)
-  const hit = rows.find((r) => (ident ? r.ident === ident : act ? new RegExp(`^\\d{5,} ${act}$`).test(r.ident) : r.text.includes(text)) && (level == null || r.lv === String(level)))
-  if (!hit) return { ok: false, reason: `Tree object ${ident || act || text} not found`, rows }
+  const hit = pickTreeRow(rows, { ident, act, text, level })
+  if (!hit) return { ok: false, reason: `Tree object ${ident || act || text} not found (${rows.length} tree rows read${rows.length ? `: ${rows.slice(0, 6).map((r) => r.ident || r.text).join(', ')}` : ''})`, rows }
   const want = act || (ident && ident.split(' ').pop()) || null
+  if (hit.alt) return selectAltRow(page, hit, rows, { want, text })
   const where = (h) => page.evaluate(({ pre, row }) => { const l = document.getElementById(`${pre}-mrss-cont-left-Row-${row}`); if (!l) return null; l.scrollIntoView({ block: 'center' }); const t = l.querySelector('.lsTextView') || l; const r = t.getBoundingClientRect(); let top = 0, bottom = innerHeight; for (let n = l.parentElement; n; n = n.parentElement) { const s = getComputedStyle(n); if (/hidden|auto|scroll|clip/.test(s.overflowY)) { const b = n.getBoundingClientRect(); if (b.height > 40) { top = Math.max(top, b.top); bottom = Math.min(bottom, b.bottom) } } } const y = r.top + r.height / 2; return { x: r.left + Math.min(20, r.width / 2), y, visible: r.height > 0 && y > top + 2 && y < bottom - 2 } }, h)
   const collapseOthers = () => page.evaluate(({ pre, row }) => { const target = +row; const rows = [...document.querySelectorAll(`tr[id^="${pre}-mrss-cont-left-Row-"]`)].map((l) => ({ l, i: +l.id.split('-Row-')[1], lv: +(l.querySelector('td[lv]')?.getAttribute('lv') ?? 9) })); const lv1 = rows.filter((r) => r.lv === 1).sort((a, b) => a.i - b.i); const own = lv1.filter((r) => r.i <= target).pop(); const c = lv1.filter((r) => r !== own).map((r) => r.l.querySelector('span[title="Collapse Node"]')).find(Boolean); if (!c) return null; const b = c.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, hit)
   let hdr = []
@@ -210,6 +266,40 @@ export async function selectTreeObject(page, { ident, act, text, level }) {
   if (text && !hdr.some((h) => h.includes(text.slice(0, 20)))) return { ok: false, reason: `Header shows ${hdr.join(' / ')}, expected ${text}` }
   const net = rows.map((r) => r.ident.match(/^(\d{5,}) \d{4}$/)).find(Boolean)
   return { ok: true, hit, header: hdr, network: net ? net[1] : null }
+}
+
+async function selectAltRow(page, hit, rows, { want, text }) {
+  let hdr = []
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const pos = await page.evaluate((id) => { const e = document.getElementById(id); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return r.height > 0 ? { x: r.left + Math.min(20, r.width / 2), y: r.top + r.height / 2 } : null }, hit.sel)
+    if (!pos) { await expandProjectTree(page); const again = (await treeRows(page)).find((r) => r.ident === hit.ident && r.text === hit.text && r.kind === hit.kind); if (again) Object.assign(hit, again); continue }
+    await sleep(300)
+    await page.mouse.click(pos.x, pos.y); await settle(page, 1500)
+    hdr = await headerValues(page)
+    if (!want || hdr.includes(want)) break
+  }
+  if (want && !hdr.includes(want)) return { ok: false, reason: `Clicked tree row but header shows ${hdr.join(' / ') || 'nothing'}, expected ${want}` }
+  if (text && !hdr.some((h) => h.includes(text.slice(0, 20)))) return { ok: false, reason: `Header shows ${hdr.join(' / ')}, expected ${text}` }
+  const net = rows.map((r) => r.ident.match(/^(\d{5,}) \d{4}$/) || (/Network header/i.test(r.kind || '') && r.ident.match(/^(\d{5,})$/))).find(Boolean)
+  return { ok: true, hit, header: hdr, network: net ? net[1] : null }
+}
+
+export async function recoverSession(page, ctx) {
+  const notes = []
+  const pop = await popupText(page)
+  if (/timed out|session.*(expired|ended)|Sitzung/i.test(pop)) {
+    const b = await dialogButton(page, ['Reload', 'OK', 'Neu laden'])
+    notes.push(b ? `SAP session timeout popup: clicked ${b.t}` : 'SAP session timeout popup seen')
+    if (!b) await page.goto(webgui(ctx.host, ctx.client), { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {})
+    await settle(page, 1500)
+  }
+  if (await isLoginPage(page)) {
+    if (!ctx.password) return { ok: false, notes, reason: 'SAP session ended and no password is held for re-login' }
+    const r = await login(page, ctx)
+    if (!r.ok) return { ok: false, notes, reason: r.reason }
+    notes.push('Logged in again after the SAP session ended')
+  }
+  return { ok: true, notes }
 }
 
 export async function typeInto(page, el, value) {

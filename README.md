@@ -236,6 +236,52 @@ The earlier motion pass gave each of the 9 pages its own colour set, animated dr
 - **Live canvas on a finished run.** The canvas polled the frame every 700 ms and never waited for the previous request. A 175 KB frame takes about 1.6 s, so up to three requests overlapped, and a finished run could sit on "Waiting for the runner" for several seconds. Before this fix, a Playwright probe caught three concurrent `since=-1` requests on the live site. The canvas now sends one request at a time and drops a reply that belongs to a run you have left. A finished run says "Loading the last frame".
 - **Not confirmed:** Safari and Firefox. Only Chromium (Playwright 1.63) was used.
 
+## Session 2026-10-01: Step 2.2 on LEARN-636, scroll lock, runner 1.3.1
+
+**What was stuck.** Run #23 (LEARN-636, Autopilot, tasks 1-14) stopped at step 2.2 with `Tree object P/2636 not found`, and stopped the same way again after Retry.
+
+**Cause.** The SAP frame from that run shows a different tree rendering. In this session, CJ20N draws the project tree as `tree#C109#<row>#…` buttons, with the IDs in a `TECH_KEY` column. The runner only knew the `mrss-cont-left/none-Row-N` table rows seen on LEARN-626 and LEARN-653, so it read 0 rows. A later frame also showed SAP's "Session has timed out" popup, left from the time the run waited for a person.
+
+| Fix | Where |
+|---|---|
+| The tree reader falls back to the `tree#Cnnn` layout. It takes IDs from `TECH_KEY`, the level from the indent, and the node type from the icon title. It adds the network number to activity IDs and skips the Templates tree. Expand uses the tree's "Expand All". | `runner/src/sap.mjs` `treeRows`, `altTreeRows`, `pickTreeRow`, `selectAltRow` |
+| Session recovery: if the "Session has timed out" popup appears, the runner clicks Reload and logs in again with the password the run already had. | `recoverSession` |
+| A failed tree or screen step is retried once automatically from the task's last `openProject` before it asks you. If SAP reset the screen while the run was paused or waiting, the project is reopened before the run continues. | `runner/src/index.mjs` |
+| Error text now lists the tree rows that were read, so the next layout change can be diagnosed from the log alone. | `selectTreeObject` |
+| **Hands-free updates.** When the site reports a newer runner and no job is running, the runner runs `git pull --ff-only`. It runs `npm install` only if the lockfile changed. It then exits, and systemd or pm2 restarts it on the new version. Set `AUTO_UPDATE=false` to turn this off. | `selfUpdate` |
+
+**Live canvas: scrolling and pausing.**
+
+| Before | Now |
+|---|---|
+| Whenever the pointer was over the canvas, the mouse wheel went to SAP, even if you had not clicked the canvas. On a large monitor most of the page is canvas, so the page seemed locked. | The wheel goes to SAP only after you click the canvas. Clicking anywhere else gives the page back its scrolling. The hint under the canvas says which state you are in. |
+| Every 1.5 s, the step list was rebuilt and `scrollIntoView` was called on the current step. That pulled the window back to it ("snap"). | The step list is only redrawn when something changes. The window is never scrolled. The list scrolls itself only when the step changes, and not within 6 s of you touching it. |
+| The prompt (14 values for step 2.2) was rebuilt every 1.5 s, so a button could move while you clicked it. | The prompt is rebuilt only when it changes. Values are folded (open when there are 4 or fewer). **Retry automation** comes first. |
+| Pause and Resume were always enabled. | Each button is enabled only when it applies. |
+
+**Tests (sandbox, 2026-10-01).**
+- `runner/dev/treecheck.mjs` runs on a page built from the LEARN-636 frame structure and on the old layout: **10/10**.
+- `scripts/e2e-local.sh` **13/13**, `scripts/e2e-features.sh` **22/22**.
+- Playwright on the canvas with a waiting 2.2 prompt:
+  - The wheel over the unfocused canvas scrolls the page, and it stays there across polls.
+  - The prompt element survives polls.
+  - The step list keeps your scroll position (500 px) across polls.
+  - The focused canvas takes the wheel.
+  - A click outside the canvas releases it.
+  - 0 console errors.
+
+**Not confirmed.**
+- A live LEARN-636 run on runner 1.3.1. The Oracle runner was still on 1.3.0 when this was written, and 1.3.0 cannot update itself.
+- Tasks 3 to 14 on the `tree#` layout. Recipes that find tree rows by text work through the same `treeRows`. Grid recipes do not use the tree.
+
+**One manual update to get 1.3.1.** Run this once on the Oracle VM. Later versions install themselves.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tiredicey/ultralight-project-builder/main/deploy/oracle/setup.sh | bash
+```
+
+After that, start a new run for LEARN-636 (Autopilot, tasks 1-14). Task 1 is skipped because P/2636 already exists.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.

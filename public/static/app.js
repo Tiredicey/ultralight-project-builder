@@ -295,7 +295,7 @@ async function viewCanvas() {
         <button class="btn sm" type="submit">Send</button>
         <select class="input" id="keySel" style="max-width:9rem" aria-label="Special key"><option value="">Key</option>${['Enter', 'Tab', 'Shift+Tab', 'Escape', 'F4', 'F8', 'Control+S', 'F3', 'Backspace', 'ArrowDown', 'ArrowUp', 'PageDown', 'PageUp'].map((k) => `<option>${k}</option>`).join('')}</select>
       </form>
-      <p class="small muted" style="margin-top:.5rem">Click the canvas to focus it, then type directly. Hover shows the SAP field title from the DOM capture. Double-click to open rows.</p>
+      <p class="small muted" style="margin-top:.5rem" id="vpHint">${HINT}</p>
     </section>
     <aside class="panel">
       <div id="prompt"></div>
@@ -312,6 +312,9 @@ async function viewCanvas() {
   S.timers.push(setInterval(pollFrame, 700))
 }
 
+const HINT = 'Click the canvas to control SAP: type, scroll the SAP screen, double-click rows. Until you click it, the mouse wheel scrolls this page.'
+const jobLive = () => !!S.job && !['done', 'failed', 'aborted'].includes(S.job.status)
+
 const send = run(async (cmd) => { if (!S.job) return; await http(`/jobs/${S.job.id}/commands`, { method: 'POST', body: cmd }) })
 
 function wireCanvas() {
@@ -327,7 +330,16 @@ function wireCanvas() {
   }
   vp.addEventListener('click', (e) => { vp.focus(); const p = toPage(e); if (p && S.job?.mode !== 'observe') send({ type: 'click', ...p }) })
   vp.addEventListener('dblclick', (e) => { const p = toPage(e); if (p && S.job?.mode !== 'observe') send({ type: 'dblclick', ...p }) })
-  vp.addEventListener('wheel', (e) => { if (!S.frame || S.job?.mode === 'observe') return; e.preventDefault(); const p = toPage(e) || { x: S.frame.width / 2, y: S.frame.height / 2 }; send({ type: 'scroll', ...p, dy: Math.sign(e.deltaY) * 300 }) }, { passive: false })
+  vp.addEventListener('wheel', (e) => {
+    if (!S.frame || ['observe', 'validate'].includes(S.job?.mode) || document.activeElement !== vp || !jobLive()) return
+    e.preventDefault()
+    const now = Date.now()
+    if (now - (S.wheelAt || 0) < 180) return
+    S.wheelAt = now
+    const p = toPage(e) || { x: S.frame.width / 2, y: S.frame.height / 2 }
+    send({ type: 'scroll', ...p, dy: Math.sign(e.deltaY) * 300 })
+  }, { passive: false })
+  document.addEventListener('pointerdown', (e) => { if (vp.isConnected && document.activeElement === vp && !vp.contains(e.target)) vp.blur() })
   vp.addEventListener('mousemove', (e) => {
     const p = toPage(e)
     const boxes = S.frame?.dom?.els || []
@@ -338,8 +350,8 @@ function wireCanvas() {
     document.querySelectorAll('.box.hot').forEach((b) => b.classList.remove('hot'))
     if (hit) { $(`.box[data-i="${hit.i}"]`)?.classList.add('hot'); $('#hudR').textContent = `${hit.t || hit.k}${hit.v ? ` = ${hit.v}` : ''}` } else $('#hudR').textContent = S.frame?.statusbar || ''
   })
-  vp.addEventListener('focus', () => vp.classList.add('focus'))
-  vp.addEventListener('blur', () => { vp.classList.remove('focus'); flushType() })
+  vp.addEventListener('focus', () => { vp.classList.add('focus'); $('#vpHint').textContent = 'Canvas has the keyboard and mouse wheel. Click outside it to scroll this page again.' })
+  vp.addEventListener('blur', () => { vp.classList.remove('focus'); flushType(); $('#vpHint').textContent = HINT })
   vp.addEventListener('keydown', (e) => {
     if (S.job?.mode === 'observe') return
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); S.typeBuf += e.key; clearTimeout(S.typeT); S.typeT = setTimeout(flushType, 250); return }
@@ -394,33 +406,64 @@ function paintJob() {
   const j = S.job
   if (!j || !$('#jobline')) return
   const cls = { done: 'ok', failed: 'err', aborted: 'err', running: 'accent', paused: 'warn', waiting: 'warn', queued: '', claimed: 'accent' }[j.status] || ''
-  $('#jobline').innerHTML = `<span class="pill ${cls}">${esc(j.status)}</span> ${esc(j.mode)} mode · tasks ${j.tasks.join(', ')} · started ${esc(fmtTime(j.started_at || j.created_at))}`
-  $('#jobactions').innerHTML = `<button class="btn sm" id="toEv">Evidence (${S.evidence.length})</button>${['done', 'failed', 'aborted'].includes(j.status) ? '<button class="btn sm primary" id="again">Run again</button>' : ''}`
-  $('#toEv').onclick = () => go('jobs', j.id)
-  if ($('#again')) $('#again').onclick = () => { S.selAccount = j.sap_user; S.selTasks = new Set(j.tasks); S.mode = j.mode; go('launch') }
+  const headSig = `${j.status}|${S.evidence.length}`
+  if ($('#jobline').dataset.sig !== headSig) {
+    $('#jobline').dataset.sig = headSig
+    $('#jobline').innerHTML = `<span class="pill ${cls}">${esc(j.status)}</span> ${esc(j.mode)} mode · tasks ${j.tasks.join(', ')} · started ${esc(fmtTime(j.started_at || j.created_at))}`
+    $('#jobactions').innerHTML = `<button class="btn sm" id="toEv">Evidence (${S.evidence.length})</button>${['done', 'failed', 'aborted'].includes(j.status) ? '<button class="btn sm primary" id="again">Run again</button>' : ''}`
+    $('#toEv').onclick = () => go('jobs', j.id)
+    if ($('#again')) $('#again').onclick = () => { S.selAccount = j.sap_user; S.selTasks = new Set(j.tasks); S.mode = j.mode; go('launch') }
+  }
   const steps = S.plan?.steps || []
   const status = {}
   for (const e of S.events) if (e.step_key) status[e.step_key] = e.level
   $('#stepCount').textContent = `${Math.min(j.step_idx, steps.length)} of ${steps.length}`
   $('#bar').style.width = `${steps.length ? (Math.min(j.step_idx, steps.length) / steps.length) * 100 : 0}%`
   const stepsEl = $('#steps')
-  stepsEl.innerHTML = steps.map((s, i) => { const st = status[s.key]; const c = i === j.step_idx && !['done', 'failed', 'aborted'].includes(j.status) ? 'cur' : st === 'ok' ? 'ok' : st === 'error' ? 'err' : st === 'warn' ? 'warn' : ''; return `<div class="step ${c}" data-i="${i}"><span class="k">${s.key}</span><span>${esc(s.label || s.op)}</span><span class="s small">${st === 'ok' ? 'done' : st === 'error' ? 'failed' : st === 'warn' ? 'check' : s.op === 'manual' ? 'you' : ''}</span></div>` }).join('')
-  stepsEl.querySelector('.cur')?.scrollIntoView({ block: 'nearest' })
+  const live = jobLive()
+  const stepSig = `${j.step_idx}|${j.status}|${S.events.length}|${steps.length}`
+  if (stepsEl.dataset.sig !== stepSig) {
+    stepsEl.dataset.sig = stepSig
+    const keep = stepsEl.scrollTop
+    stepsEl.innerHTML = steps.map((s, i) => { const st = status[s.key]; const c = i === j.step_idx && live ? 'cur' : st === 'ok' ? 'ok' : st === 'error' ? 'err' : st === 'warn' ? 'warn' : ''; return `<div class="step ${c}" data-i="${i}"><span class="k">${s.key}</span><span>${esc(s.label || s.op)}</span><span class="s small">${st === 'ok' ? 'done' : st === 'error' ? 'failed' : st === 'warn' ? 'check' : s.op === 'manual' ? 'you' : ''}</span></div>` }).join('')
+    stepsEl.scrollTop = keep
+    const cur = stepsEl.querySelector('.cur')
+    if (cur && stepsEl.dataset.idx !== String(j.step_idx) && Date.now() - (S.stepsTouched || 0) > 6000) {
+      const top = cur.offsetTop - stepsEl.offsetTop
+      if (top < stepsEl.scrollTop || top + cur.offsetHeight > stepsEl.scrollTop + stepsEl.clientHeight) stepsEl.scrollTop = Math.max(0, top - stepsEl.clientHeight / 3)
+    }
+    stepsEl.dataset.idx = String(j.step_idx)
+  }
+  if (!stepsEl.dataset.wired) { stepsEl.dataset.wired = '1'; ['wheel', 'pointerdown', 'touchstart', 'keydown'].forEach((t) => stepsEl.addEventListener(t, () => { S.stepsTouched = Date.now() }, { passive: true })) }
   const log = $('#log')
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30
-  log.innerHTML = S.events.filter((e) => e.level !== 'dom').slice(-200).map((e) => `<div class="${e.level}"><time>${clock(e.created_at)}</time><span>${e.step_key ? `[${esc(e.step_key)}] ` : ''}${esc(e.message)}</span></div>`).join('')
-  if (atBottom) log.scrollTop = log.scrollHeight
+  const shown = S.events.filter((e) => e.level !== 'dom')
+  if (log.dataset.n !== String(shown.length)) {
+    log.dataset.n = String(shown.length)
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30
+    const keep = log.scrollTop
+    log.innerHTML = shown.slice(-200).map((e) => `<div class="${e.level}"><time>${clock(e.created_at)}</time><span>${e.step_key ? `[${esc(e.step_key)}] ` : ''}${esc(e.message)}</span></div>`).join('')
+    log.scrollTop = atBottom ? log.scrollHeight : keep
+  }
   const p = j.prompt
-  $('#prompt').innerHTML = p && ['paused', 'waiting'].includes(j.status) ? `
-    <div class="prompt" role="alert">
+  const show = p && ['paused', 'waiting'].includes(j.status)
+  const pEl = $('#prompt')
+  const pSig = show ? JSON.stringify([j.status, p]) : ''
+  if (pEl.dataset.sig !== pSig) {
+    pEl.dataset.sig = pSig
+    const nVals = p?.values ? Object.keys(p.values).length : 0
+    pEl.innerHTML = show ? `
+    <div class="prompt" role="region" aria-live="polite" aria-label="Operator prompt">
       <div class="row" style="justify-content:space-between"><h3>${esc(p.title || 'Your turn')}</h3><span class="pill warn">${esc(p.stepKey || '')}</span></div>
       <p class="small">${esc(p.instruction || p.reason || '')}</p>
-      ${p.values ? `<dl>${Object.entries(p.values).map(([k, val]) => `<dt>${esc(k)}</dt><dd>${esc(val)}</dd><button class="btn sm" data-copy="${esc(val)}" type="button">Copy</button>`).join('')}</dl>` : ''}
       ${p.error ? `<p class="small" style="color:var(--err)">${esc(p.error)}</p>` : ''}
-      <div class="row"><button class="btn primary sm" id="pContinue">Done, continue</button><button class="btn sm" id="pRetry">Retry automation</button><button class="btn sm" id="pSkip">Skip</button></div>
+      <div class="row"><button class="btn primary sm" id="pRetry">Retry automation</button><button class="btn sm" id="pContinue">I did it, continue</button><button class="btn sm" id="pSkip">Skip</button></div>
+      ${nVals ? `<details ${nVals <= 4 ? 'open' : ''}><summary class="small">Values to type (${nVals})</summary><dl>${Object.entries(p.values).map(([k, val]) => `<dt>${esc(k)}</dt><dd>${esc(val)}</dd><button class="btn sm" data-copy="${esc(val)}" type="button">Copy</button>`).join('')}</dl></details>` : ''}
     </div>` : ''
-  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard?.writeText(b.dataset.copy); send({ type: 'type', text: b.dataset.copy }); toast('Typed into the focused SAP field') }))
-  if ($('#pContinue')) { $('#pContinue').onclick = () => send({ type: 'continue' }); $('#pRetry').onclick = () => send({ type: 'retry' }); $('#pSkip').onclick = () => send({ type: 'skip' }) }
+    pEl.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard?.writeText(b.dataset.copy); send({ type: 'type', text: b.dataset.copy }); toast('Typed into the focused SAP field') }))
+    if ($('#pContinue')) { $('#pContinue').onclick = () => send({ type: 'continue' }); $('#pRetry').onclick = () => { send({ type: 'retry' }); toast('Retrying automatically') }; $('#pSkip').onclick = () => send({ type: 'skip' }) }
+  }
+  const pause = $('#ctl [data-c="pause"]'), resume = $('#ctl [data-c="resume"]')
+  if (pause && resume) { pause.disabled = !live || j.status === 'paused'; resume.disabled = !live || j.status !== 'paused' }
 }
 
 async function viewJobs() {
