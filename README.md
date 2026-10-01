@@ -207,6 +207,25 @@ The **Export submission** page builds the IT2406 Word file in one click. You no 
     - Task 11: CN25 was never captured by a run that actually posted it.
     - Task 3: the "before" state no longer exists, because the links are in place.
 
+## Export: clean by default (2026-10-01)
+
+The exported .docx now contains only the screenshots with their captions, the conclusion heading and the conclusion sentences, plus the cover details as plain lines. Everything else is left out unless you switch it on in the **In the document** card on the Export page. The choice is saved in this browser (`localStorage` key `uc_export_parts`).
+
+| Option (off by default) | What it adds back |
+|---|---|
+| Cover details as a table | Student, section, SAP user and project as a 2-column table instead of plain lines |
+| Task summary table | Status, transaction and run for all 14 tasks |
+| Task data tables | WBS, activities, special activities, relationships, PS text and milestones, postings |
+| Plan versus actual table | Cost element table above the conclusion |
+| Conclusion variant line | "Conclusion variant N of 42 for LEARN-###" |
+| Missing screenshot notes | The task heading and "Screenshot not captured yet..." for a figure with no usable image |
+| Capture check notes | Italic note under a flagged screenshot |
+
+**Include all** turns everything on, **Clean default** turns everything off. The conclusion variant picker on the page still works: it changes the text, and the variant line only goes into the file if you switch that option on.
+
+**Checked (sandbox, LEARN-636 data, Node with stubbed image loading):** default export had 0 tables and none of the variant line, "not captured" or "Note:" text; with all options on it had 9 tables and all three texts. python-docx opened both files.
+**Not confirmed:** I did not run this against the live site or open the files in Microsoft Word. The new code is not live until the site is redeployed.
+
 ## Interface (2026-09-30, final design pass)
 
 The earlier motion pass gave each of the 9 pages its own colour set, animated drawing and outline word, plus gradient headings, pulsing dots, a particle canvas and card tilt. That broke the one-accent rule in `facts.txt` (sections 21.2, 21.5 and 22.A) and competed with the SAP screenshots for attention. This pass keeps every feature and changes only the look.

@@ -16,6 +16,18 @@ export const FIGURES = [
 const TASK_TITLES = { 1: 'Create project and WBS', 2: 'Activities, external processing, primary costs', 3: 'Network graph before relationships', 4: 'Create 22 relationships', 5: 'Network graph after relationships', 6: 'PS text and milestones', 7: 'Release project', 8: 'Planned cost report', 9: 'Structure overview', 10: 'Primary cost 8,000 EUR flexible', 11: 'Confirm 35 h on 0010', 12: 'Cost report after confirmation', 13: 'Supplier invoice 9,700 EUR', 14: 'Final cost report' }
 const TCODE = { 1: 'CJ20N', 2: 'CJ20N', 3: 'Network Graph', 4: 'CJ20N', 5: 'Network Graph', 6: 'CJ20N', 7: 'CJ20N', 8: 'S_ALR_87013542', 9: 'CN41N', 10: 'CJ20N', 11: 'CN25', 12: 'S_ALR_87013542', 13: 'FB60', 14: 'S_ALR_87013542' }
 
+export const EXPORT_PARTS = [
+  { key: 'coverTable', label: 'Cover details as a table', hint: 'Off: student, section and project print as plain lines' },
+  { key: 'statusTable', label: 'Task summary table', hint: 'Status, transaction and run for all 14 tasks' },
+  { key: 'dataTables', label: 'Task data tables', hint: 'WBS, activities, relationships, milestones, postings' },
+  { key: 'conclTable', label: 'Plan versus actual table', hint: 'Cost element table above the conclusion text' },
+  { key: 'variantLine', label: 'Conclusion variant line', hint: '"Conclusion variant N of 42 for LEARN-###"' },
+  { key: 'missingNotes', label: 'Missing screenshot notes', hint: '"Screenshot not captured yet..." with its task heading' },
+  { key: 'flagNotes', label: 'Capture check notes', hint: 'Italic note under a flagged screenshot' }
+]
+export const DEFAULT_PARTS = Object.fromEntries(EXPORT_PARTS.map((x) => [x.key, false]))
+export const resolveParts = (inc) => ({ ...DEFAULT_PARTS, ...(inc || {}) })
+
 const stamp = (t) => (t ? new Date(t).toLocaleString('en-GB', { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '')
 const money = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -69,10 +81,11 @@ export async function buildSubmission(sub, opts = {}, onProgress = () => {}) {
   const doc = new Doc()
   const student = opts.student || sub.user?.name || ''
   const section = opts.section || ''
+  const inc = resolveParts(opts.include)
 
   doc.title('IT2406 Performance Task 1')
   doc.p('SAP PS and FI: Development of Ultralight Bike', { style: 'Subtitle' })
-  doc.table(['Item', 'Value'], [
+  const cover = [
     ['Student', student || '(enter your name)'],
     ['Section', section || '(enter your section)'],
     ['SAP user', d.sapUser],
@@ -81,11 +94,15 @@ export async function buildSubmission(sub, opts = {}, onProgress = () => {}) {
     ['Supplier', d.supplier],
     ['PS text', d.psText],
     ['Package generated', stamp(sub.generatedAt)]
-  ], [2600, 6760])
+  ]
+  if (inc.coverTable) doc.table(['Item', 'Value'], cover, [2600, 6760])
+  else for (const [k, val] of cover) doc.p([{ t: `${k}: `, b: true }, val], { after: 40 })
 
+  if (inc.statusTable) {
   doc.h('Task summary', 1)
   doc.p('Status comes from the newest run that touched each task: a Validate read-back from SAP where one exists, otherwise the runner step result.', { i: true, size: 18, color: '4B5563' })
   doc.table(['#', 'Task', 'Transaction', 'Status', 'Recorded', 'Run'], Object.entries(status).map(([t, s]) => [t, TASK_TITLES[t], TCODE[t], s.state, stamp(s.at), s.job ? `#${s.job}` : '']), [420, 3000, 1500, 1640, 2000, 800])
+  }
 
   doc.h('Screenshots', 1)
   let n = 0, i = 0
@@ -94,18 +111,19 @@ export async function buildSubmission(sub, opts = {}, onProgress = () => {}) {
     onProgress(`Adding figure ${i} of ${FIGURES.length}`)
     const override = opts.overrides?.[f.name]
     const ev = figs[f.name]
-    doc.h(`Task ${f.task}: ${f.title}`, 2)
-    if (!override && !ev) { doc.p(figs[`${f.name}:why`] ? `Screenshot not available: ${figs[`${f.name}:why`]}. Attach your own image before exporting.` : `Screenshot not captured yet. Run Task ${f.task} in Autopilot or Assist, or attach your own image before exporting.`, { b: true, color: '9B3434' }); continue }
+    if (!override && !ev) { if (!inc.missingNotes) continue; doc.h(`Task ${f.task}: ${f.title}`, 2); doc.p(figs[`${f.name}:why`] ? `Screenshot not available: ${figs[`${f.name}:why`]}. Attach your own image before exporting.` : `Screenshot not captured yet. Run Task ${f.task} in Autopilot or Assist, or attach your own image before exporting.`, { b: true, color: '9B3434' }); continue }
     try {
       const img = await imageBytes(override || ev.url)
+      doc.h(`Task ${f.task}: ${f.title}`, 2)
       doc.image(img.bytes, 'jpeg', img.w, img.h)
       n++
       const when = override ? `attached by you, ${stamp(override.lastModified)}` : `captured ${stamp(ev.created_at)}, run #${ev.job_id}`
       doc.p(`Figure ${n}. ${f.tcode}. ${f.what(d)}. (${when})`, { style: 'Caption' })
-      if (!override && ev.flag) doc.p(`Note: ${ev.flagNote}.`, { i: true, size: 18, color: '8A5A14', center: true })
-    } catch (e) { doc.p(`Screenshot could not be loaded: ${e.message}`, { b: true, color: '9B3434' }) }
+      if (!override && ev.flag && inc.flagNotes) doc.p(`Note: ${ev.flagNote}.`, { i: true, size: 18, color: '8A5A14', center: true })
+    } catch (e) { if (!inc.missingNotes) continue; doc.h(`Task ${f.task}: ${f.title}`, 2); doc.p(`Screenshot could not be loaded: ${e.message}`, { b: true, color: '9B3434' }) }
   }
 
+  if (inc.dataTables) {
   onProgress('Adding task tables')
   doc.h('Task data', 1)
   doc.h('Task 1: WBS elements', 2)
@@ -126,16 +144,17 @@ export async function buildSubmission(sub, opts = {}, onProgress = () => {}) {
     ['Expected actual after Task 11', `${money(d.expected.actualAfterConfirmation)} EUR`],
     ['Expected actual after Task 13', `${money(d.expected.actualAfterInvoice)} EUR`]
   ], [2600, 6760])
+  }
 
   onProgress('Writing conclusion')
   doc.h('Conclusion', 1)
-  doc.table(['Cost element', 'Plan, Task 8', 'Plan, Task 12', 'Actual, Task 12', 'Actual, Task 14'], [
+  if (inc.conclTable) doc.table(['Cost element', 'Plan, Task 8', 'Plan, Task 12', 'Actual, Task 12', 'Actual, Task 14'], [
     ['6300000 Other operating expenses (activity 0135)', '10,000.00', '8,000.00', '0.00', '9,700.00'],
     ['8000000 Labor', 'unchanged', 'unchanged', '1,750.00', '1,750.00'],
     ['All cost elements', 'Task 8 total', 'Task 8 total − 2,000.00', '1,750.00', '11,450.00']
   ], [3160, 1500, 1700, 1500, 1500])
   for (const s of conclusion(d, variant)) doc.p(s)
-  doc.p(`Conclusion variant ${variant + 1} of ${CONCLUSION_COUNT} for ${d.sapUser}.`, { i: true, size: 16, color: '9CA3AF' })
+  if (inc.variantLine) doc.p(`Conclusion variant ${variant + 1} of ${CONCLUSION_COUNT} for ${d.sapUser}.`, { i: true, size: 16, color: '9CA3AF' })
 
   onProgress('Packing the Word file')
   return doc.build({ title: `IT2406 PT1 ${d.sapUser} ${d.project}`, author: student || 'Ultralight Project Builder', footer: `${d.sapUser} · ${d.project} · IT2406 Performance Task 1` })

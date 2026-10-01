@@ -1,4 +1,4 @@
-import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName } from './submission.js'
+import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName, EXPORT_PARTS, resolveParts } from './submission.js'
 import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
 import { hero, mountBackdrop, reveal, typeLine, countUp, transition, media } from './fx.js'
 import { enhance, openShortcuts } from './extras.js'
@@ -531,6 +531,8 @@ async function viewExport() {
   const verified = Object.values(status).filter((x) => x.state === 'Verified in SAP' || x.state === 'Done by runner').length
   const eyeball = Object.values(status).filter((x) => x.state === 'Check screenshot').length
   const saved = JSON.parse(localStorage.getItem('uc_export') || '{}')
+  const parts = resolveParts(JSON.parse(localStorage.getItem('uc_export_parts') || '{}'))
+  const partsOn = () => EXPORT_PARTS.filter((x) => parts[x.key]).length
   v.innerHTML = `
   ${hero('export', { title: 'Export <span class="grad">submission</span>', text: `Builds the IT2406 Word deliverable for ${esc(sap)} in your browser: the required screenshots with capture timestamps, the task status table, all task data tables and a conclusion written for ${esc(d.project)}. No downloading screenshots one by one.`, meta: `<span class="pill ${have === FIGURES.length ? 'ok' : 'warn'}">${have} of ${FIGURES.length} screenshots</span><span class="pill ${verified + eyeball === 14 ? 'ok' : 'warn'}">${verified} verified${eyeball ? ` + ${eyeball} screenshot-only` : ''} of 14 tasks</span><span class="pill">${sub.jobs.length} runs</span>`, actions: `<select class="input" id="expAcc" style="max-width:13rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
   <div class="export-grid">
@@ -544,7 +546,7 @@ async function viewExport() {
           <figcaption><b>Task ${f.task}. ${esc(f.title)}</b><span class="muted">${esc(f.tcode)} · ${own ? esc(own.name) : e ? `run #${e.job_id} · ${esc(fmtTime(e.created_at))}` : 'run this task or attach an image'}</span>${!own && e?.flag ? `<span class="small" style="color:var(--warn)">${esc(e.flagNote)}</span>` : ''}${!own && !e && figs[`${f.name}:why`] ? `<span class="small" style="color:var(--warn)">${esc(figs[`${f.name}:why`])}</span>` : ''}
           <div class="row"><label class="btn sm">${src ? 'Replace' : 'Attach'}<input type="file" accept="image/*" data-over="${f.name}"></label>${own ? `<button class="btn sm ghost" data-unover="${f.name}">Use capture</button>` : ''}</div></figcaption></figure>` }).join('')}</div>
       </section>
-      <section class="card scroll"><h2>Task status in the document</h2>
+      <section class="card scroll"><h2>Task status</h2>
         <table class="t status-t"><thead><tr><th>#</th><th>Task</th><th>Status</th><th>Recorded</th><th>Run</th></tr></thead><tbody>
         ${Object.entries(status).map(([t, s]) => `<tr><td>${t}</td><td>${esc(S.pack?.tasks?.find((x) => x.id === Number(t))?.title || '')}</td><td><span class="pill ${/Verified|Done/.test(s.state) ? 'ok' : s.state === 'Failed' ? 'err' : 'warn'}">${esc(s.state)}</span></td><td class="small muted">${esc(fmtTime(s.at))}</td><td class="small">${s.job ? `#${s.job}` : ''}</td></tr>`).join('')}
         </tbody></table></section>
@@ -556,6 +558,12 @@ async function viewExport() {
         <div class="field"><label for="expSec">Section</label><input class="input" id="expSec" value="${esc(saved.section || '')}" placeholder="e.g. BSIT 3A"></div>
         <button class="btn primary huge" id="expGo"><span>Export Submission Package (.docx)</span></button>
         <p class="small muted" id="expProg" aria-live="polite">One file: ${esc(fileName(d))}</p>
+      </section>
+      <section class="card stack parts">
+        <div class="row" style="justify-content:space-between"><h2>In the document</h2><span class="pill" id="partsN">${partsOn()} of ${EXPORT_PARTS.length} extras</span></div>
+        <p class="small muted">Screenshots, captions and the conclusion text are always included. Extras below stay out of the .docx unless you switch them on.</p>
+        <ul class="part-list">${EXPORT_PARTS.map((x) => `<li><label class="part"><input type="checkbox" data-part="${x.key}" ${parts[x.key] ? 'checked' : ''}><span><b>${esc(x.label)}</b><span class="small muted">${esc(x.hint)}</span></span></label></li>`).join('')}</ul>
+        <div class="row"><button class="btn sm" id="partsAll">Include all</button><button class="btn sm ghost" id="partsNone">Clean default</button></div>
       </section>
       <section class="card stack concl">
         <div class="row" style="justify-content:space-between"><h2>Conclusion</h2><span class="pill">variant <b id="cvN">${S.exportVar.k + 1}</b> / ${CONCLUSION_COUNT}</span></div>
@@ -576,10 +584,15 @@ async function viewExport() {
   document.querySelectorAll('[data-unover]').forEach((b) => b.addEventListener('click', () => { delete S.exportOver.files[b.dataset.unover]; viewExport() }))
   const remember = () => localStorage.setItem('uc_export', JSON.stringify({ name: $('#expName').value, section: $('#expSec').value }))
   $('#expName').oninput = remember; $('#expSec').oninput = remember
+  const saveParts = () => { localStorage.setItem('uc_export_parts', JSON.stringify(parts)); $('#partsN').textContent = `${partsOn()} of ${EXPORT_PARTS.length} extras` }
+  document.querySelectorAll('[data-part]').forEach((i) => i.addEventListener('change', () => { parts[i.dataset.part] = i.checked; saveParts() }))
+  const setAll = (on) => { EXPORT_PARTS.forEach((x) => { parts[x.key] = on }); document.querySelectorAll('[data-part]').forEach((i) => { i.checked = on }); saveParts() }
+  $('#partsAll').onclick = () => setAll(true)
+  $('#partsNone').onclick = () => setAll(false)
   $('#expGo').onclick = run(async () => {
     const btn = $('#expGo'); btn.disabled = true; btn.classList.add('busy')
     try {
-      const blob = await buildSubmission(sub, { student: $('#expName').value.trim(), section: $('#expSec').value.trim(), variant: S.exportVar.k, overrides: S.exportOver.files }, (m) => { $('#expProg').textContent = m })
+      const blob = await buildSubmission(sub, { student: $('#expName').value.trim(), section: $('#expSec').value.trim(), variant: S.exportVar.k, overrides: S.exportOver.files, include: { ...parts } }, (m) => { $('#expProg').textContent = m })
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileName(d); document.body.append(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(a.href), 30000)
       $('#expProg').textContent = `Saved ${fileName(d)} (${(blob.size / 1048576).toFixed(1)} MB)`
