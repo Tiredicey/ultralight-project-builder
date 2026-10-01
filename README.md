@@ -409,7 +409,6 @@ Checked live: tasks 2, 4, 6 run a second time changed nothing, and tasks 11 and 
 | Setup guide | Copy and progress | A Copy button on every command block, a tick per step with a progress bar |
 | Owner console | Filter and CSV | Every table gets a filter box and CSV export |
 
-Rules from `facts.txt` that this keeps: one brass accent, one corner radius, no glow or fake status dots, real `<button>` and `<dialog>` elements with focus rings, a reduced-motion path (no row flash, no fades), tools hidden when printing, no em dashes.
 
 **Check:** `runner/dev/extrascheck.mjs` uses every add-on at desktop 1440 px, phone 390 px and with reduced motion: **80/80** against wrangler dev and **86/86** on the live site (more checks run there because real runs exist: screenshot viewer, canvas run bar), 0 script errors, no sideways scroll. `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22.
 
