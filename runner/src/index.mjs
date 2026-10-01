@@ -104,12 +104,12 @@ class Job {
         else if (out.soft) { this.results.failed++; this.ev('error', out.reason, s.key); this.idx++ }
         else {
           const tries = (this.autoTries[s.key] || 0)
-          if (tries < 2) {
+          if (tries < 3) {
             const rc = await recoverSession(this.page, { ...this.ctx, password: this.secret }).catch(() => ({ ok: false, notes: [] }))
-            const again = rc.notes.length > 0 || (tries === 0 && RETRYABLE.test(out.reason || ''))
+            const again = rc.notes.length > 0 || tries === 0 || RETRYABLE.test(out.reason || '')
             if (again && rc.ok !== false) {
               this.autoTries[s.key] = tries + 1
-              this.ev('warn', `${out.reason || 'Step failed'}. ${rc.notes.join('. ') || 'Reopening and retrying once automatically'}`, s.key)
+              this.ev('warn', `${out.reason || 'Step failed'}. ${rc.notes.join('. ') || `Reopening and retrying automatically (${tries + 1} of 3)`}`, s.key)
               const back = this.reopenFor(s)
               if (back != null) { this.results.ok = Math.max(0, this.results.ok - (this.idx - back)); this.idx = back }
               continue

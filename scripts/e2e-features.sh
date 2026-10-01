@@ -26,7 +26,7 @@ r=$(curl -s -b $T/o -H "$J" -d '{"type":"click","x":1,"y":1}' $B/jobs/$vid/comma
 
 tok=$(curl -s -b $T/o -H "$J" -d '{"name":"e2e-12","accounts":[]}' $B/admin/runners | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
 r=$(curl -s -H "$J" -H "authorization: Bearer $tok" -H 'x-runner-version: 1.2.0' -d '{"info":{"version":"1.2.0","host":"e2e-host","platform":"linux/arm64","accounts":["LEARN-626"],"accountsWithPassword":["LEARN-626"],"sap":{"ok":true,"status":200,"ms":90},"sapHost":"m53p.ucc.cloud"}}' $B/runner/hello)
-ok "runner hello returns latest version" $(has "$r" '"latest":"1.3.2"') "$r"
+ok "runner hello returns latest version" $(has "$r" '"latest":"1.3.3"') "$r"
 r=$(curl -s -H "$J" -H "authorization: Bearer ucr_nope" -d '{}' $B/runner/hello); ok "hello with bad token refused" $(has "$r" 'invalid') "$r"
 r=$(curl -s -H "$J" -H "authorization: Bearer $tok" -d '{"accounts":["LEARN-626"]}' $B/runner/claim); ok "runner claims validate job with validate plan" $(echo "$r" | python3 -c "import sys,json;d=json.load(sys.stdin);print(1 if d.get('job',{}).get('mode')=='validate' and d['plan']['steps'][0]['op']=='validate' else 0)") "${r:0:160}"
 # report two task results and finish

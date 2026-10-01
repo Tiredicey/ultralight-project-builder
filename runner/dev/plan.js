@@ -8,10 +8,14 @@ for (const s of plan.steps) {
   try {
     if (s.op === 'openProject') {
       await sap.gotoTxn(page, ctx, 'CJ20N'); await sap.handlePopups(page, [/^Continue$/i, /^Cancel$/i])
-      const ok = await sap.openProjectFromWorklist(page, s.project); await sap.settle(page, 1500)
+      await sap.projectBuilderWelcome(page)
+      let ok = await sap.openProjectFromWorklist(page, s.project)
+      if (!ok) { await sap.clickButton(page, [/^Open$/i, /Open project/i]); const f = await sap.findByLabel(page, [/Project def/i, /Project Definition/i]); if (f) { await sap.typeInto(page, f, s.project); await page.keyboard.press('Enter'); await sap.settle(page, 3000) } ok = (await page.title()).includes(s.project) }
+      await sap.settle(page, 1500)
+      rctx.vars.project = s.project
       await sap.expandProjectTree(page)
       const net = (await sap.treeRows(page)).map((x) => x.ident.match(/^(\d{5,})$/)).find(Boolean)
-      if (net) rctx.vars.network = net[1]
+      if (net) rctx.vars.network = net[1]; else delete rctx.vars.network
       rctx.dirty = false
       r = { ok, note: `${await page.title()} net=${rctx.vars.network}` }
     } else if (s.op === 'txn') r = await sap.gotoTxn(page, ctx, s.code)

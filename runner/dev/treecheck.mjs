@@ -52,6 +52,31 @@ const selC = await selectTreeObject(pg, nodeC)
 ok(selC.ok && selC.hit.kind === 'WBS Element', 'C: top WBS selected for Activity Overview', selC.reason || selC.hit?.kind)
 ok(overviewNode({ vars: { network: '4000200', project: 'P/2636' } }, {}).ident === '4000200', 'C: network preferred when known')
 
+const many = Array.from({ length: 30 }, (_, i) => ['Network Activity', `Act ${i}`, String(1000 + i * 10).padStart(4, '0'), 3])
+const vrows = [['Project Definition', 'Dev', 'P/2636', 0], ['WBS Element', 'Dev', 'P/2636', 1], ['Network header', 'Net', '4000123', 2], ...many]
+const vpage = `<html><head><title>Project Builder: Project P/2636</title></head><body style="margin:0"><div style="position:absolute;top:150px;left:400px"><input value="P/2636" id="h1"><input value="x" id="h2"></div>
+<div id="tree" style="position:absolute;top:220px;left:40px;width:350px;height:300px;overflow:hidden"></div><script>
+const R = ${JSON.stringify(vrows)}
+let off = 0
+const tree = document.getElementById('tree')
+const draw = () => { tree.innerHTML = R.slice(off, off + 10).map(([k, t, id, lv], j) => { const i = off + j + 1; return '<div style="height:25px;position:relative"><span role="button" id="tree#C109#' + i + '#ni" title="' + k + '" style="position:absolute;left:' + lv * 16 + 'px;width:20px;height:22px;display:inline-block"></span><span role="button" data-id="' + id + '" id="tree#C109#' + i + '#1#          1#i" style="position:absolute;left:' + (lv * 16 + 24) + 'px;height:22px;display:inline-block">' + t + '</span><span role="button" id="tree#C109#' + i + '#2#TECH_KEY#i" style="position:absolute;left:390px;height:22px;display:inline-block">' + id + '</span></div>' }).join('') }
+tree.addEventListener('click', (e) => { const t = e.target.closest('[data-id]'); if (t) document.getElementById('h1').value = t.dataset.id })
+tree.addEventListener('wheel', (e) => { off = Math.max(0, Math.min(R.length - 10, off + (e.deltaY > 0 ? 4 : -4))); draw() })
+draw()
+</script></body></html>`
+await pg.setContent(vpage)
+ok((await treeRows(pg)).length === 10, 'D: virtual tree renders 10 of 33 rows', (await treeRows(pg)).length)
+const selD = await selectTreeObject(pg, { act: '1280' })
+ok(selD.ok && selD.header.includes('1280'), 'D: row below the visible window found by scrolling (LEARN-636 4.16 "Tree object 0130 not found")', selD.reason || selD.header?.join('/'))
+const selE = await selectTreeObject(pg, { ident: 'P/2636', level: 1 })
+ok(selE.ok, 'D: scrolls back up to the top WBS', selE.reason)
+const selF = await selectTreeObject(pg, { act: '9999' })
+ok(!selF.ok && /not found \(33 tree rows read/.test(selF.reason), 'D: missing row reports every row seen while scrolling', selF.reason)
+const hidden = `<html><body><div><span role="button" id="tree#C109#1#ni" title="WBS Element" style="display:inline-block;width:20px;height:22px"></span><span id="tree#C109#1#1-arialabel" style="position:absolute;width:0;height:0;overflow:hidden">Level 1 Expanded</span><span role="button" id="tree#C109#1#1#          1#i" style="display:inline-block;height:22px">Development of Ultralight Bike</span><span role="button" id="tree#C109#1#2#TECH_KEY#i" style="display:inline-block;height:22px">P/2636</span></div></body></html>`
+await pg.setContent(hidden)
+const rh = await treeRows(pg)
+ok(rh[0]?.text === 'Development of Ultralight Bike' && rh[0]?.sel.endsWith('#i'), 'E: hidden aria-label span ignored (LEARN-636 run 28 "header shows nothing")', JSON.stringify(rh[0]))
+
 await pg.setContent(pageA)
 const ra = await treeRows(pg)
 ok(ra.length === 2 && ra[1].ident === 'P/2653' && ra[1].lv === '1' && !ra[1].alt, 'A: mrss tree still read the old way', JSON.stringify(ra))

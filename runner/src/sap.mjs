@@ -155,7 +155,7 @@ async function altTreeRows(page) {
       const r = e.getBoundingClientRect()
       const txt = (e.getAttribute('title') || e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim()
       if (m[3] === 'ni') { o.kind = txt; o.ix = r.left }
-      else o.cols.push({ id: e.id, tech: /TECH_KEY/i.test(m[3]), txt, x: r.left })
+      else if (/#i$/.test(m[3]) && r.width > 0 && r.height > 0) o.cols.push({ id: e.id, tech: /TECH_KEY/i.test(m[3]), txt, x: r.left })
       by.set(key, o)
     }
     const rows = [...by.values()].filter((o) => o.kind != null && o.cols.length)
@@ -203,16 +203,19 @@ export async function expandProjectTree(page) {
 }
 
 export async function treeRows(page) {
-  const main = await mrssTreeRows(page)
-  if (main.some((r) => r.ident)) return main
   const alt = await altTreeRows(page).catch(() => [])
+  if (alt.some((r) => r.ident && /Project Definition|WBS Element/i.test(r.kind || ''))) return alt
+  const all = await mrssTreeRows(page)
+  const proj = new Set(all.filter((r) => /^P\/\S+$/.test(r.ident)).map((r) => r.pre))
+  const main = proj.size ? all.filter((r) => proj.has(r.pre)) : all
+  if (main.some((r) => r.ident)) return main
   return alt.some((r) => r.ident || r.text) ? alt : main
 }
 
-export function pickTreeRow(rows, { ident, act, text, level }) {
-  const match = (r) => (ident ? r.ident === ident : act ? new RegExp(`^(\\d{5,} )?${act}$`).test(r.ident) && (!r.alt || !/WBS|Project Definition/i.test(r.kind || '')) : r.text.includes(text))
-  const exact = rows.find((r) => match(r) && (level == null || r.lv === String(level)))
-  if (exact || level == null) return exact
+export function pickTreeRow(rows, { ident, act, text, level, exact }) {
+  const match = (r) => (ident ? r.ident === ident : act ? new RegExp(`^(\\d{5,} )?${act}$`).test(r.ident) && (!r.alt || !/WBS|Project Definition/i.test(r.kind || '')) : exact ? r.text === text : r.text.includes(text))
+  const first = rows.find((r) => match(r) && (level == null || r.lv === String(level)))
+  if (first || level == null) return first
   const same = rows.filter(match)
   if (!same.length) return undefined
   if (level === 0) return same.find((r) => /Project Definition/i.test(r.kind || '')) || same[0]
@@ -227,10 +230,38 @@ async function mrssTreeRows(page) {
   })
 }
 
-export async function selectTreeObject(page, { ident, act, text, level }) {
+async function scrollAltTree(page, dir) {
+  const box = await page.evaluate(() => { const e = [...document.querySelectorAll('[id^="tree#"][id$="#ni"]')].map((x) => ({ x, r: x.getBoundingClientRect() })).filter(({ r }) => r.width > 0 && r.left < 500 && r.top > 100 && r.top < innerHeight - 60).sort((a, b) => a.r.top - b.r.top); if (!e.length) return null; const a = e[0].r, z = e[e.length - 1].r; return { x: a.left + 60, y: (a.top + z.bottom) / 2 } }).catch(() => null)
+  if (!box) return false
+  await page.mouse.move(box.x, box.y); await page.mouse.wheel(0, 360 * dir); await settle(page, 1000)
+  return true
+}
+
+async function findAltRow(page, want) {
+  let rows = await treeRows(page)
+  let hit = pickTreeRow(rows, want)
+  if (hit || !rows.some((r) => r.alt)) return { rows, hit }
+  const seen = new Map(rows.map((r) => [`${r.pre}#${r.row}`, r]))
+  for (const dir of [1, -1]) {
+    let last = ''
+    for (let k = 0; k < 14 && !hit; k++) {
+      if (!(await scrollAltTree(page, dir))) break
+      rows = await treeRows(page)
+      for (const r of rows) seen.set(`${r.pre}#${r.row}`, r)
+      hit = pickTreeRow(rows, want)
+      const sig = rows.map((r) => r.row).join(',')
+      if (sig === last) break
+      last = sig
+    }
+    if (hit) break
+  }
+  const all = [...seen.values()].sort((a, b) => +a.row - +b.row)
+  return { rows: hit ? rows : all, hit }
+}
+
+export async function selectTreeObject(page, { ident, act, text, level, exact }) {
   await expandProjectTree(page)
-  const rows = await treeRows(page)
-  const hit = pickTreeRow(rows, { ident, act, text, level })
+  const { rows, hit } = await findAltRow(page, { ident, act, text, level, exact })
   if (!hit) return { ok: false, reason: `Tree object ${ident || act || text} not found (${rows.length} tree rows read${rows.length ? `: ${rows.slice(0, 6).map((r) => r.ident || r.text).join(', ')}` : ''})`, rows }
   const want = act || (ident && ident.split(' ').pop()) || null
   if (hit.alt) return selectAltRow(page, hit, rows, { want, text })
@@ -437,16 +468,22 @@ export async function readCell(page, gridId, row, col) {
 export async function clickMenu(page, path) {
   const items = () => page.evaluate(() => [...document.querySelectorAll('[role=menuitem], [role=menuitemcheckbox]')].map((e) => { const r = e.getBoundingClientRect(); return { t: e.innerText.replace(/\s+/g, ' ').trim(), x: r.left + Math.min(40, r.width / 2), y: r.top + r.height / 2, w: r.width, top: r.top, left: r.left, dis: e.getAttribute('aria-disabled') === 'true' } }).filter((o) => o.w > 0 && o.top > -1000))
   const mb = await page.evaluate(() => { const e = document.getElementById('cua2sapmenu_btn') || [...document.querySelectorAll('[role=button]')].find((x) => /^Menu/.test((x.innerText || '').trim()) && x.getBoundingClientRect().top < 90); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
-  if (!mb) return { ok: false, reason: 'menu button not found' }
-  await page.mouse.click(mb.x, mb.y); await sleep(1400)
-  let minLeft = -1, prev = null
-  for (const [i, item] of path.entries()) {
+  let rest = path
+  if (mb) { await page.mouse.click(mb.x, mb.y); await sleep(1400) }
+  else {
+    const bar = await page.evaluate((name) => { const re = new RegExp(`^\\s*${name}\\s*$`, 'i'); const e = [...document.querySelectorAll('[id^="Mnu"][id$="_But"], [role=menubar] [role=button], [role=menubar] [role=menuitem]')].find((x) => re.test(x.innerText || x.textContent || '') && x.getBoundingClientRect().width > 0 && x.getBoundingClientRect().top < 110); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, path[0])
+    if (!bar) return { ok: false, reason: `menu button not found (no Menu button and no "${path[0]}" in the menu bar)` }
+    await page.mouse.click(bar.x, bar.y); await sleep(1400)
+    rest = path.slice(1)
+  }
+  let minLeft = -1, prev = mb ? null : path[0]
+  for (const [i, item] of rest.entries()) {
     const re = new RegExp(`^\\s*${item}`, 'i')
     let it = null
     for (let k = 0; k < 6 && !it; k++) { it = (await items()).filter((o) => o.left > minLeft && re.test(o.t)).pop(); if (!it) await sleep(500) }
     if (!it) { await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); return { ok: false, reason: `menu item "${item}" not available${prev ? ` under ${prev}` : ''} (select the right tree node first)` } }
     if (it.dis) { await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); return { ok: false, reason: `menu item "${it.t}" is disabled` } }
-    if (i < path.length - 1) {
+    if (i < rest.length - 1) {
       if (prev) await page.mouse.move(it.x - 30, it.y, { steps: 4 })
       await page.mouse.move(it.x, it.y, { steps: 5 }); await sleep(1600)
       await page.mouse.move(it.left + it.w - 12, it.y, { steps: 6 }); await sleep(400)

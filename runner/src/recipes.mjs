@@ -134,11 +134,8 @@ export async function milestone(ctx, s) {
     if (await popupText(p)) await dialogButton(p, ['Cancel'])
     ctx.dirty = true
   }
-  await expandProjectTree(p)
-  const node = (await treeRows(p)).find((r) => r.text === s.desc)
-  if (!node) return { ok: false, reason: `Milestone ${s.desc} not in tree after Enter` }
-  const sel = await selectTreeObject(p, { ident: node.ident })
-  if (!sel.ok) return sel
+  const sel = await selectTreeObject(p, { text: s.desc, exact: true })
+  if (!sel.ok) return { ok: false, reason: `Milestone ${s.desc} not in tree after Enter (${sel.reason})` }
   const pick = async () => (await checkboxes(p)).filter((c) => s.flags.some((re) => re.test(c.t)))
   const before = await pick()
   if (before.some((c) => !c.ck)) { for (const c of before.filter((c) => !c.ck)) { await p.mouse.click(c.x, c.y); await sleep(700) } await p.keyboard.press('Enter'); await settle(p, 1500); ctx.dirty = true }
