@@ -2,22 +2,21 @@ import { chromium } from 'playwright'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { VIEW, login } from './sap.mjs'
 import { Checker } from './checks.mjs'
-import { loadEnv } from './env.mjs'
+import { loadEnv, localAccounts } from './env.mjs'
 import { planFor, PREDECESSORS, dataFor, suffixOf, CHECKS } from '../../shared/pack.js'
 
 loadEnv()
 const HOST = process.env.SAP_HOST || 'm53p.ucc.cloud'
 const CLIENT = process.env.SAP_CLIENT || '236'
-const first = (process.env.SAP_ACCOUNTS || '').split(',')[0]
-const user = first.slice(0, first.indexOf(':')).toUpperCase()
-const password = first.slice(first.indexOf(':') + 1)
+const [user, secret] = Object.entries(localAccounts())[0] || ['', '']
 const OUT = new URL('../validation/', import.meta.url)
 mkdirSync(OUT, { recursive: true })
-if (!suffixOf(user) || !password) { console.error('Set SAP_ACCOUNTS=LEARN-###:password in runner/.env'); process.exit(1) }
+if (!suffixOf(user) || !secret) { console.error('Set SAP_ACCOUNTS=LEARN-###:password in runner/.env'); process.exit(1) }
 const d = dataFor(suffixOf(user))
 const ids = process.argv.slice(2).length ? process.argv.slice(2) : [...new Set(Object.values(CHECKS).flatMap((c) => c.ids))]
 const results = []
-const rec = (id, check, ok, detail) => { results.push({ id, check, ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${id.padEnd(12)} ${check.padEnd(44)} ${detail}`) }
+const redact = (v) => String(v ?? '').split(secret).join('***')
+const rec = (id, check, ok, detail) => { const line = { id: redact(id), check: redact(check), ok: !!ok, detail: redact(detail) }; results.push(line); process.stdout.write(`${line.ok ? 'PASS' : 'FAIL'}  ${line.id.padEnd(12)} ${line.check.padEnd(44)} ${line.detail}\n`) }
 
 const plan = planFor(user)
 rec('pack', `plan builds for ${user}`, plan.steps.length > 50, `${plan.steps.length} steps`)
@@ -26,7 +25,7 @@ rec('pack', 'plan survives JSON (D1 hop)', JSON.parse(JSON.stringify(plan)).step
 
 const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
 const page = await (await browser.newContext({ viewport: VIEW, locale: 'en-US' })).newPage()
-const ctx = { host: HOST, client: CLIENT, user, password }
+const ctx = { host: HOST, client: CLIENT, user, password: secret }
 try {
   const l = await login(page, ctx)
   rec('login', `${user} on ${HOST}/${CLIENT}`, l.ok, l.reason || l.note || 'ok')

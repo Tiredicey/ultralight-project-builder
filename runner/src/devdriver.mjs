@@ -13,6 +13,7 @@ const rctx = { page, vars: {}, dirty: false, sap: { host: ctx.host, client: ctx.
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor
 
 createServer(async (req, res) => {
+  if (req.socket.remoteAddress !== '127.0.0.1' && req.socket.remoteAddress !== '::ffff:127.0.0.1') { res.writeHead(403); res.end(); return }
   let body = ''
   for await (const c of req) body += c
   try {
@@ -20,8 +21,9 @@ createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(out ?? null, null, 1))
   } catch (e) {
+    process.stderr.write(`${e.stack || e}\n`)
     res.writeHead(500, { 'content-type': 'text/plain' })
-    res.end(String(e.stack || e))
+    res.end(`Error: ${e instanceof Error ? e.message : 'driver script failed'}`)
   }
 }).listen(PORT, '127.0.0.1')
 process.stdout.write(`driver on ${PORT}\n`)

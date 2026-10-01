@@ -356,7 +356,8 @@ export async function createProject(ctx, s) {
 
 async function openProjectFromWorklistQuick(p, project) {
   const txt = await p.evaluate(() => document.body.innerText)
-  return new RegExp(`(^|\\s)${project.replace(/[/]/g, '\\/')}(\\s|$)`, 'm').test(txt) && /Last Projects Processed/.test(txt)
+  const lines = txt.split(/\r?\n/).flatMap((l) => l.split(/\s+/))
+  return lines.includes(project) && txt.includes('Last Projects Processed')
 }
 
 export async function wbsElements(ctx, s) {

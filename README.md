@@ -414,6 +414,21 @@ Checked live: tasks 2, 4, 6 run a second time changed nothing, and tasks 11 and 
 
 **Not confirmed:** Firefox and Safari (only Chromium was tested). The headless test cannot show a real OS notification, so "Alert me" was checked only up to the permission prompt.
 
+## Security alerts fixed (2026-10-01)
+
+GitHub reported 3 CodeQL alerts and 6 Dependabot alerts on `main`.
+
+| Alert | Plain-language cause | Fix |
+|---|---|---|
+| CodeQL #3, high: clear-text logging of sensitive information, `runner/src/validate.mjs:20` | `npm run validate` reads the SAP password from `SAP_ACCOUNTS`. The same function that prints results was given values that came from that line, so a login error that echoed the password would have printed it to the screen and into `validation/results.json`. | The password is read only through `localAccounts()` and kept in its own variable. Every printed or saved line passes through `redact()`, which replaces the password with `***`. Checked live on LEARN-636: 0 occurrences in the output and in `results.json`. |
+| CodeQL #1, high: incomplete string escaping, `runner/src/recipes.mjs:359` | The code built a search pattern from the project number and only escaped `/`. Characters such as `.` or `+` kept their special pattern meaning, so `P.2636` would also have matched `P/2636`. | No pattern is built any more: the page text is split into words and compared exactly. Tested with 9 inputs (including `P.2636`, `P/2636+` and `.*`), and live Task 1 on LEARN-636 still finds P/2636. |
+| CodeQL #2, medium: stack trace exposure, `runner/src/devdriver.mjs:24` | The developer test driver returned the full error trace, with file paths and code lines, to whoever sent the request. | The reply now has the error message only; the full trace goes to the server log. The driver also rejects any caller that is not on the same machine. |
+| Dependabot #3, #4, #5, #6, #9, #10 (undici, 1 high, 2 moderate, 3 low) | `undici` is the web-request library inside `wrangler` and `miniflare`, the tools that build and preview the site. Version 7.29.0 had the bugs (for example, skipping TLS certificate checks in one connection mode, and caching one user's cookies for another). They are development tools only: the deployed site and the runner do not include undici. | `npm audit fix` moved wrangler to 4.145.0, miniflare to 5.20260930.0-alpha and undici to 7.29.1. GitHub's advisory data lists 7.29.1 as the first patched version for all six. `npm audit` now finds 0 vulnerabilities in the site and in `runner/`. |
+
+**Regression after the fixes:** `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22, `npm run check`, `runner/dev/treecheck.mjs` all pass, `runner/dev/extrascheck.mjs` 80/80. Live SAP: Task 1 on LEARN-636 skipped creation correctly, and `npm run validate` logged in.
+
+**Not confirmed:** the alerts closing on GitHub. The sandbox token cannot read the code-scanning or Dependabot APIs (HTTP 403), so I could not watch them close. They close by themselves when CodeQL and Dependabot rescan this commit.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.
