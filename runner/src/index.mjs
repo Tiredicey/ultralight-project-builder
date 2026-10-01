@@ -31,16 +31,33 @@ if (!CONTROL || !TOKEN) { process.stderr.write('Set CONTROL_URL and RUNNER_TOKEN
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (...a) => process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${a.join(' ')}\n`)
 
+const QUOTA = { until: 0, warned: 0 }
+const quotaActive = () => QUOTA.until > Date.now()
+const QUOTA_RE = /exceeded D1's free tier daily row (write|read) limit|D1_(WRITE|READ)_LIMIT/i
+const nextUtcMidnight = () => { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) }
+const noteQuota = (retryAt) => {
+  QUOTA.until = Math.max(QUOTA.until, Number(retryAt) || nextUtcMidnight())
+  if (Date.now() - QUOTA.warned > 10 * 60 * 1000) { QUOTA.warned = Date.now(); log(`NOTE Cloudflare D1 free daily write limit reached. Reporting slows down until ${new Date(QUOTA.until).toISOString()}; SAP work continues and log lines are kept here until writes reopen`) }
+}
+
 async function call(path, body) {
-  const res = await fetch(`${CONTROL}/api/runner${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`, 'x-runner-version': VERSION }, body: JSON.stringify(body || {}) })
+  const res = await fetch(`${CONTROL}/api/runner${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`, 'x-runner-version': VERSION }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000) })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  if (!res.ok) {
+    const quota = /D1_(WRITE|READ)_LIMIT/.test(data.code || '') || QUOTA_RE.test(data.error || '')
+    if (quota) noteQuota(data.retryAt)
+    const e = new Error(data.error || `HTTP ${res.status}`); e.quota = quota; e.status = res.status
+    throw e
+  }
+  if (data.quota?.retryAt) noteQuota(data.quota.retryAt)
+  else if (data.stored === true && quotaActive()) { QUOTA.until = 0; log('NOTE D1 writes accepted again, normal reporting resumed') }
   return data
 }
 
 const ERR_RE = /(does not exist|not allowed|not authorized|keine Berechtigung|invalid|ungültig|is locked|gesperrt|error|fehler|not possible|cannot be|must be)/i
 const isErr = async (page) => page.evaluate(() => !!document.querySelector('[class*="MessageBar"][class*="rror"], [class*="sbar"] [class*="rror"], [class*="Msg"][class*="rror"] , [title="Error"], [aria-label="Error"]')).catch(() => false)
 
+const EVENT_CAP = 600
 const RETRYABLE = /Read-back differs|missing after Enter|already exists$|No free row for|Create button not found|Create > Project menu item not found|Project definition fields not found|Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
 
 class Job {
@@ -52,10 +69,15 @@ class Job {
     this.ctx = { host: SAP_HOST, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '' }
     this.results = { ok: 0, failed: 0, manual: 0, skipped: 0 }
     this.autoTries = {}
+    this.seen = new Set(); this.ack = []; this.watched = true
     this.rctx = { page: null, vars: {}, dirty: false, sap: { host: SAP_HOST, client: SAP_CLIENT } }
   }
 
-  ev(level, message, stepKey, data) { this.events.push({ level, message, stepKey, data }); log(level.toUpperCase(), stepKey || '', message) }
+  ev(level, message, stepKey, data) {
+    this.events.push({ level, message, stepKey, data })
+    if (this.events.length > EVENT_CAP) { const i = this.events.findIndex((e) => e.level === 'info' || e.level === 'dom'); this.events.splice(i >= 0 ? i : 0, 1) }
+    log(level.toUpperCase(), stepKey || '', message)
+  }
 
   async start() {
     this.context = await this.browser.newContext({ viewport: VIEW, deviceScaleFactor: 1, locale: 'en-US', ignoreHTTPSErrors: false })
@@ -135,25 +157,49 @@ class Job {
       this.alive = false
       await sleep(1200)
       await this.pushFrame(true).catch(() => {})
-      await this.flush(this.aborted ? 'aborted' : this.status === 'failed' ? 'failed' : 'done').catch(() => {})
+      const end = this.aborted ? 'aborted' : this.status === 'failed' ? 'failed' : 'done'
+      for (let i = 0; i < 4; i++) { const ok = await this.flush(end).catch(() => false); if (ok && !this.events.length) break; await sleep(quotaActive() ? 15000 : 2000) }
+      if (this.events.length) log(`NOTE ${this.events.length} log line(s) for job #${this.job.id} could not be stored on the site (D1 limit); they are in this journal`)
       await this.context.close().catch(() => {})
     }
   }
 
   async flush(status, extra = {}) {
     if (status) this.status = status
-    const events = this.events.splice(0, 50)
-    const r = await call(`/jobs/${this.job.id}/state`, { status: this.status, stepIdx: this.idx, prompt: this.prompt, events, ...extra }).catch((e) => { this.events.unshift(...events); log('WARN sync', e.message); return { commands: [] } })
-    for (const c of r.commands || []) await this.onCommand(c)
+    while (this.flushing) await this.flushing.catch(() => {})
+    this.flushing = this.flushNow(extra)
+    try { return await this.flushing } finally { this.flushing = null }
   }
 
-  async loopSync() { while (this.alive) { await this.flush().catch(() => {}); await sleep(this.prompt || this.paused ? 700 : 1000) } }
+  async flushNow(extra) {
+    const events = this.events.splice(0, 50)
+    const ack = this.ack.splice(0)
+    const back = () => { this.events.unshift(...events); this.ack.unshift(...ack) }
+    const r = await call(`/jobs/${this.job.id}/state`, { status: this.status, stepIdx: this.idx, prompt: this.prompt, events, ack, ...extra }).catch((e) => { back(); if (!e.quota) log('WARN sync', e.message); return { commands: [], failed: true } })
+    if (r.stored === false) back()
+    if (typeof r.watched === 'boolean') this.watched = r.watched
+    for (const c of r.commands || []) {
+      if (!this.ack.includes(c.id)) this.ack.push(c.id)
+      if (this.seen.has(c.id)) continue
+      this.seen.add(c.id)
+      await this.onCommand(c)
+    }
+    return !r.failed && r.stored !== false
+  }
+
+  async loopSync() {
+    while (this.alive) {
+      await this.flush().catch(() => {})
+      const busy = this.prompt || this.paused || Date.now() - this.activeAt < 15000
+      await sleep(quotaActive() ? (busy ? 2500 : 6000) : busy ? 700 : this.watched ? 1000 : 2500)
+    }
+  }
 
   async loopFrames() {
     while (this.alive) {
       const fast = Date.now() - this.activeAt < 8000
-      await this.pushFrame().catch(() => {})
-      await sleep(fast ? 450 : 1500)
+      if (this.watched || fast) await this.pushFrame().catch(() => {})
+      await sleep(!this.watched && !fast ? 4000 : quotaActive() ? 3000 : fast ? 450 : 1500)
     }
   }
 
@@ -165,7 +211,9 @@ class Job {
     if (!force && hash === this.lastHash && Date.now() - this.lastFrameAt < 10000) return
     this.lastHash = hash; this.lastFrameAt = Date.now()
     const dom = await captureDom(this.page, this.target).catch(() => null)
-    await call(`/jobs/${this.job.id}/frame`, { seq: ++this.seq, width: VIEW.width, height: VIEW.height, image: buf.toString('base64'), dom, url: this.page.url(), title: await this.page.title().catch(() => ''), statusbar: await statusbar(this.page) })
+    const r = await call(`/jobs/${this.job.id}/frame`, { seq: ++this.seq, final: force || undefined, width: VIEW.width, height: VIEW.height, image: buf.toString('base64'), dom, url: this.page.url(), title: await this.page.title().catch(() => ''), statusbar: await statusbar(this.page) }).catch((e) => { this.lastHash = ''; throw e })
+    if (typeof r?.watched === 'boolean') this.watched = r.watched
+    if (r?.stored === false) this.lastHash = ''
   }
 
   async onCommand(c) {
@@ -453,7 +501,7 @@ async function main() {
     let sap = null
     try { const t = Date.now(); const r = await fetch(webgui(SAP_HOST, SAP_CLIENT), { redirect: 'manual', signal: AbortSignal.timeout(15000) }); sap = { ok: r.status < 500, status: r.status, ms: Date.now() - t } } catch (e) { sap = { ok: false, error: e.message } }
     const info = { version: VERSION, host: hostname(), platform: `${process.platform}/${process.arch}`, node: process.version, cpus: cpus().length, memMb: Math.round(totalmem() / 1048576), chromium: browser.version(), headless: HEADLESS, accounts: Object.keys(LOCAL), accountsWithPassword: Object.entries(LOCAL).filter(([, p]) => p).map(([u]) => u), sapHost: SAP_HOST, sapClient: SAP_CLIENT, sap, startedAt: STARTED, maxJobs: MAX_JOBS, only: ONLY }
-    const r = await call('/hello', { info }).catch((e) => { log('WARN hello', e.message); return null })
+    const r = await call('/hello', { info }).catch((e) => { if (!e.quota) log('WARN hello', e.message); return null })
     if (r?.latest && r.latest !== VERSION && !hello.warned) { hello.warned = true; log(`NOTE site expects runner ${r.latest}, this is ${VERSION}${AUTO_UPDATE ? '; will update itself when idle' : '. git pull && npm install'}`) }
     hello.latest = r?.latest || hello.latest
   }
@@ -477,9 +525,9 @@ async function main() {
         }
         if (++idle % 60 === 1) log(`Waiting for jobs${ONLY.length ? ` (only ${ONLY.join(', ')})` : ''}`)
       }
-    } catch (e) { log('WARN', e.message) }
+    } catch (e) { if (!e.quota) log('WARN', e.message) }
     if (!active.size && hello.latest && selfUpdate(hello.latest)) { await browser.close().catch(() => {}); process.exit(0) }
-    await sleep(3000)
+    await sleep(quotaActive() && !active.size ? 30000 : idle > 20 ? 5000 : 3000)
   }
 }
 
