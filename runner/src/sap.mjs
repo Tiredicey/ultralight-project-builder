@@ -259,6 +259,39 @@ async function findAltRow(page, want) {
   return { rows: hit ? rows : all, hit }
 }
 
+export async function openProject(page, project) {
+  await projectBuilderWelcome(page)
+  if (await openProjectFromWorklist(page, project)) return true
+  const open = await clickButton(page, [/^Open$/i, /Open project/i, /Öffnen/i])
+  if (!open) return false
+  const f = await findByLabel(page, [/Project def/i, /Project Definition/i])
+  if (!f) return false
+  await typeInto(page, f, project); await page.keyboard.press('Enter'); await settle(page, 3000)
+  return (await page.title()).includes(project)
+}
+
+export async function allTreeRows(page) {
+  await expandProjectTree(page)
+  let rows = await treeRows(page)
+  if (!rows.some((r) => r.alt)) return rows
+  const seen = new Map(rows.map((r) => [`${r.pre}#${r.row}`, r]))
+  for (const dir of [-1, 1]) {
+    let last = ''
+    for (let k = 0; k < 16; k++) {
+      if (!(await scrollAltTree(page, dir))) break
+      rows = await treeRows(page)
+      for (const r of rows) seen.set(`${r.pre}#${r.row}`, r)
+      const sig = rows.map((r) => r.row).join(',')
+      if (sig === last) break
+      last = sig
+    }
+  }
+  const all = [...seen.values()].sort((a, b) => +a.row - +b.row)
+  let net = ''
+  for (const r of all) { if (/Network header/i.test(r.kind || '') && /^\d{5,}$/.test(r.ident)) net = r.ident; else if (net && /^\d{4}$/.test(r.ident) && /Activity/i.test(r.kind || '')) r.ident = `${net} ${r.ident}` }
+  return all
+}
+
 export async function selectTreeObject(page, { ident, act, text, level, exact }) {
   await expandProjectTree(page)
   const { rows, hit } = await findAltRow(page, { ident, act, text, level, exact })

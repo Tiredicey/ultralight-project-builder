@@ -1,4 +1,4 @@
-import { gotoTxn, selectTreeObject, expandProjectTree, treeRows, clickTitle, cellState, findByLabel, captureDom, openProjectFromWorklist, settle } from './sap.mjs'
+import { gotoTxn, selectTreeObject, expandProjectTree, allTreeRows, clickTitle, cellState, findByLabel, captureDom, openProject as openProj, settle } from './sap.mjs'
 import { costReport } from './recipes.mjs'
 import { PREDECESSORS } from '../../shared/pack.js'
 
@@ -21,14 +21,14 @@ export class Checker {
 
   async openProject() {
     await gotoTxn(this.page, this.ctx, 'CJ20N')
-    if (!(await openProjectFromWorklist(this.page, this.d.project))) throw new Error(`Could not open ${this.d.project} in CJ20N`)
+    if (!(await openProj(this.page, this.d.project))) throw new Error(`Could not open ${this.d.project} in CJ20N`)
   }
 
   async tree() {
     const { page, d } = this
     await this.openProject()
-    const clicks = await expandProjectTree(page)
-    const rows = await treeRows(page)
+    const rows = await allTreeRows(page)
+    const clicks = 1
     const acts = rows.filter((r) => /^\d{5,} \d{4}$/.test(r.ident)).map((r) => r.ident.split(' ')[1])
     const expActs = [...d.activities.map((a) => a.act), '0045', '0135']
     const missingWbs = d.wbs.filter((w) => !rows.some((r) => r.ident === w.wbs)).map((w) => w.wbs)

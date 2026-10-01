@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput, recoverSession, projectBuilderWelcome } from './sap.mjs'
+import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput, recoverSession, projectBuilderWelcome, openProject } from './sap.mjs'
 import { RECIPES, saveProject } from './recipes.mjs'
 import { Checker } from './checks.mjs'
 import { loadEnv, localAccounts } from './env.mjs'
@@ -271,11 +271,7 @@ class Job {
       const r = await gotoTxn(p, this.ctx, 'CJ20N'); if (!r.ok) return r
       await projectBuilderWelcome(p)
       await handlePopups(p, [/^Continue$/i, /^Cancel$/i])
-      let hit = (await openProjectFromWorklist(p, s.project)) ? s.project : null
-      if (!hit) {
-        const open = await clickButton(p, [/^Open$/i, /Open project/i, /Öffnen/i])
-        if (open) { const f = await findByLabel(p, [/Project def/i, /Project Definition/i]); if (f) { await typeInto(p, f, s.project); await p.keyboard.press('Enter'); await settle(p, 2500); hit = s.project } }
-      }
+      const hit = (await openProject(p, s.project)) ? s.project : null
       if (!hit) return { ok: false, reason: `Could not open ${s.project} from the worklist or Open dialog` }
       await settle(p, 2500)
       if (/not all objects were locked|locked by|is currently being processed/i.test(await statusbar(p)) || /Display (project|network)/i.test(await p.title())) {

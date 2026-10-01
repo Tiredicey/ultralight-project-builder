@@ -13,7 +13,7 @@ const SESSION_DAYS = 14
 const FRAME_MAX = 1_800_000
 const EVIDENCE_MAX = 1_900_000
 const ACTIVE = ['queued', 'claimed', 'running', 'paused', 'waiting']
-export const RUNNER_LATEST = '1.3.3'
+export const RUNNER_LATEST = '1.3.4'
 const DOC_CHUNK = 900_000
 const DOC_MAX = 20 * 1024 * 1024
 
