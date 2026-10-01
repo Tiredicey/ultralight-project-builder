@@ -157,6 +157,7 @@ async function launch() {
   const missing = () => { const a = accs.find((x) => x.sapUser === $('#acc')?.value); if (!a?.validation) return null; return Object.entries(a.validation.tasks).filter(([, x]) => x.level !== 'ok').map(([k]) => Number(k)) }
   const m = missing()
   const pick = $('#xPick')
+  if (!pick || !form.isConnected) return
   pick.innerHTML = m == null ? '<span class="small muted">Run Validate once to pick only the tasks SAP still lacks.</span>' : m.length ? `<button type="button" class="btn sm" id="xMissing">Only the ${m.length} task${m.length > 1 ? 's' : ''} not verified in SAP</button>` : '<span class="pill ok">Validate found every task done in SAP</span>'
   $('#xMissing')?.addEventListener('click', () => { $$('input[name=t]', form).forEach((i) => { i.checked = m.includes(Number(i.value)) }); $$('input[name=t]', form)[0]?.dispatchEvent(new Event('change', { bubbles: true })) })
   form.addEventListener('change', (e) => { if (e.target.name === 't') estimate() })
