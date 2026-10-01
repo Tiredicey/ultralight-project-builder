@@ -1,6 +1,7 @@
 import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName } from './submission.js'
 import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
 import { hero, mountBackdrop, reveal, typeLine, countUp, transition, media } from './fx.js'
+import { enhance, openShortcuts } from './extras.js'
 const $ = (s, r = document) => r.querySelector(s)
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '')
@@ -64,7 +65,21 @@ function render() {
 }
 
 let settleObs
-const settle = () => { const v = $('#view'); if (!v) return; settleObs?.disconnect(); let q = 0; settleObs = new MutationObserver(() => { if (q) return; q = requestAnimationFrame(() => { q = 0; reveal(v); countUp(v) }) }); settleObs.observe(v, { childList: true, subtree: true }); reveal(v) }
+const XCTX = {
+  user: () => S.user, view: () => S.view, go: (v) => go(v), http, toast, toggleTheme, rerender: () => transition(render),
+  job: () => S.job, frame: () => S.frame, steps: () => S.plan?.steps?.length || 0, planRels: () => S.planData?.relationships || [],
+  nav: () => [...NAV, ...(S.user && S.user.role !== 'user' ? [['admin', 'Owner console']] : [])],
+  commands: () => [
+    ...XCTX.nav().map(([v, l]) => ({ label: l, hint: 'page', run: () => go(v) })),
+    ...(S.pack?.tasks || []).map((t) => ({ label: `Task ${t.id}. ${t.title}`, hint: `task sheet · ${t.txn}`, run: () => go('sheet', t.id) })),
+    ...S.accounts.map((a) => ({ label: `Validate ${a.sap_user} in SAP`, hint: 'read-only run, changes nothing', run: run(async () => { const r = await http('/jobs', { method: 'POST', body: { sapUser: a.sap_user, tasks: [], mode: 'validate' } }).catch((e) => { if (e.data?.jobId) { go('canvas', e.data.jobId); return null } throw e }); if (r) { toast(`Validate run #${r.id} queued`); go('canvas', r.id) } }) })),
+    ...(S.jobs || []).slice(0, 8).map((j) => ({ label: `Run #${j.id} ${j.sap_user}`, hint: `${j.mode} · ${j.status}`, run: () => go('canvas', j.id) })),
+    { label: 'Switch theme', hint: 't', run: toggleTheme },
+    { label: 'Keyboard shortcuts', hint: '?', run: openShortcuts },
+    { label: 'Sign out', hint: 'session', run: logout }
+  ]
+}
+const settle = () => { const v = $('#view'); if (!v) return; settleObs?.disconnect(); let q = 0; settleObs = new MutationObserver(() => { if (q) return; q = requestAnimationFrame(() => { q = 0; reveal(v); countUp(v); enhance(XCTX) }) }); settleObs.observe(v, { childList: true, subtree: true }); reveal(v); enhance(XCTX) }
 
 function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'login') {
   const first = S.health && !S.health.initialized
@@ -114,6 +129,7 @@ function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'log
   $('#pwEye').onclick = (e) => { const i = $('#password'); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; e.target.textContent = show ? 'Hide' : 'Show'; e.target.setAttribute('aria-pressed', String(show)) }
   typeLine($('#typed'), ['on autopilot.', 'with you in the loop.', 'for any LEARN-###.', 'verified in SAP.'])
   countUp($('.auth-facts'))
+  enhance(XCTX)
   const vid = $('.dmz-video video')
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { vid.removeAttribute('autoplay'); vid.pause() }
   $('#authForm').addEventListener('submit', run(async (e) => {
@@ -602,6 +618,7 @@ async function viewPlan() {
   const sap = S.selAccount || S.accounts[0]?.sap_user || 'LEARN-000'
   const plan = await http(`/me/plan/${encodeURIComponent(sap)}`)
   const d = plan.data
+  S.planData = d
   const acts = [...d.activities, { act: '0045', desc: d.external.desc, dur: '0', work: '', wc: 'external', wbs: `${d.project}-1` }, { act: '0135', desc: d.primCost.desc, dur: '0', work: '', wc: 'primary cost', wbs: `${d.project}-5` }]
   const c = cpm(acts, d.relationships)
   const cols = {}

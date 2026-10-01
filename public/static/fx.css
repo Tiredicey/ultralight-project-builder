@@ -124,3 +124,54 @@ body { background: transparent; }
 .concl p { margin: 0 0 .6rem; line-height: 1.6; }
 .concl-nav { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 .status-t td:nth-child(4) { white-space: nowrap; }
+
+[hidden] { display: none !important; }
+.x-filter { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; flex-wrap: wrap; }
+.x-filter .input { max-width: 18rem; }
+.x-chips { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.x-chips .btn.x-on, .btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.x-dialog { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--text); padding: 1.1rem; width: min(560px, calc(100vw - 2rem)); box-shadow: var(--shadow); }
+.x-dialog::backdrop { background: rgba(21, 23, 26, .45); }
+.x-pal { padding: .8rem; margin-top: 12vh; }
+.x-pal ul { list-style: none; margin: 0; padding: 0; max-height: 52vh; overflow: auto; }
+.x-pal li { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem .6rem; border-radius: var(--r); cursor: pointer; }
+.x-pal li[aria-selected="true"], .x-pal li:hover { background: var(--accent-soft); }
+.x-keys { display: grid; grid-template-columns: max-content 1fr; gap: .45rem 1rem; margin: 0; }
+.x-keys dd { margin: 0; }
+kbd { font: 500 .78rem var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: .05rem .35rem; background: var(--surface-2); }
+.x-caps { color: var(--warn); margin-top: .3rem; }
+.x-eta .pill, #xElapsed { font-variant-numeric: tabular-nums; }
+#xElapsed { font: 500 .85rem var(--mono); }
+.x-runbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
+.x-runbar .x-spacer { flex: 1; }
+#vp:fullscreen { background: var(--bg); display: grid; place-items: center; }
+#vp:fullscreen img { max-height: 100vh; width: auto; }
+.x-tick { display: inline-flex; gap: .3rem; align-items: center; font-size: .82rem; cursor: pointer; }
+.sheet-task.x-done { opacity: .62; }
+.sheet-task.x-done h2 { text-decoration: line-through; text-decoration-color: var(--accent); }
+.x-copy { cursor: copy; border-radius: 6px; transition: background .15s; }
+.x-copy:hover, .x-copy:focus-visible { background: var(--accent-soft); }
+.sheet-steps li.x-hit { background: var(--accent-soft); border-radius: var(--r); }
+.x-auto { gap: .6rem; }
+.x-lb { width: min(1200px, calc(100vw - 2rem)); padding: .6rem; }
+.x-lb figure { margin: 0; display: grid; gap: .5rem; }
+.x-lb img { width: 100%; max-height: 78vh; object-fit: contain; background: var(--surface-2); border-radius: var(--r); }
+.gallery figure > a { cursor: zoom-in; }
+.fig.x-drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.fig:focus-visible { outline: 2px solid var(--accent); }
+.x-pre { position: relative; }
+.x-pre-copy { position: absolute; top: .4rem; right: .4rem; }
+.x-step { margin-right: .45rem; accent-color: var(--accent); vertical-align: -2px; }
+.guide li.x-done { color: var(--muted); }
+.x-guide-meter { margin-bottom: 1rem; }
+.net .node { cursor: pointer; outline: none; }
+.net.x-focus .node, .net.x-focus path { opacity: .22; transition: opacity .15s; }
+.net.x-focus .node.x-on, .net.x-focus .node.x-up, .net.x-focus .node.x-down, .net.x-focus path.x-on { opacity: 1; }
+.net .node.x-on rect { stroke: var(--accent); stroke-width: 2.5; }
+.net .node.x-up rect { stroke-dasharray: 4 3; stroke: var(--accent); }
+.net .node:focus-visible rect { stroke: var(--accent); stroke-width: 3; }
+.x-net-info { margin-top: .5rem; min-height: 1.4em; }
+tr.x-flash td { animation: xflash 1.6s ease-out; }
+@keyframes xflash { from { background: var(--accent-soft); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { tr.x-flash td { animation: none; background: var(--accent-soft); } .net.x-focus .node, .net.x-focus path, .x-copy { transition: none; } }
+@media print { .x-filter, .x-chips, .x-runbar, .x-tick, .x-sheet-tools, .x-guide-meter, .x-pre-copy, .x-step { display: none !important; } }
