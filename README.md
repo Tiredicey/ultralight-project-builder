@@ -343,6 +343,53 @@ After that, start a new run for LEARN-636 (Autopilot, tasks 1-14). Task 1 is ski
 
 **Not confirmed:** a live LEARN-636 run on 1.3.2. The runner holds passwords for LEARN-626 and LEARN-653 only (`/api/me/readiness`, `accountsWithPassword`). No LEARN-636 SAP password was supplied, so a new run needs it entered on the Launch page or added to `SAP_ACCOUNTS`.
 
+## Session 2026-10-01: LEARN-636 complete, runner 1.3.4, safe to rerun from any task
+
+**Result on live SAP (M53/236, LEARN-636, P/2636):**
+
+| Run | Mode | Result | Source |
+|---|---|---|---|
+| Dev driver, tasks 2 to 14 one by one | live writes | Every task passed after the fixes below; FB60 document 1900000076 | sandbox driver log |
+| #30 | Autopilot 1-14 through the site | **done, 84/84: 72 verified, 0 by operator, 0 failed, 12 skipped** (tasks 7, 11, 13 already in SAP) | `/api/jobs/30` |
+| #32 | Validate 1-14 through the site | **11 of 11 checkable tasks pass**; 3, 5, 9 are screenshot tasks | `/api/jobs/32` |
+
+SAP state read back: 6 WBS, 16 activities (network 4000123), 22 links, PS text PH-636-1, milestones 00004/00005/00006, status `REL NTUP`, 0135 at 8,000.00 and flexible, Labor 1,750.00, invoice 9,700.00, actual 11,450.00, commitment 5,000.00, plan 49,433.14.
+
+**Errors found on LEARN-636 and the fix for each**
+
+| Step | Error | Cause (seen in the live DOM) | Fix |
+|---|---|---|---|
+| 2.2 (run #28) | `Clicked tree row but header shows nothing` | The reader clicked a 0x0 `tree#C109#2#1-arialabel` span | Only visible `…#i` cells are read as columns |
+| 2.7 | `Tree object P/2636 not found (20 rows: Individual Objects…)` | After the service screen, the 0045 grid was read as the tree | The project tree wins whenever it shows a Project Definition or WBS row |
+| 4.16, 6.11 | `Tree object 0130 not found` | The tree renders about 24 rows; 0130, 0140 and P/2636-5 only appear after scrolling | `findAltRow` scrolls the tree down and up until the row appears; on a miss it reports every row it saw |
+| 7.2 | `menu button not found` | At 1920 px WebGUI shows a menu bar (Project, Edit, …) instead of one Menu button | `clickMenu` falls back to the bar item, then walks the submenu |
+| Validate 1, 2, 6, 7, 10 | `Could not open P/2636 in CJ20N` | A double-click in the worklist only opened a preview | Shared `openProject`: worklist first, then the Open dialog |
+| Validate 4 | `Tree object 0020 not found` | Same preview | Same |
+| Any | One retry only | | Up to 3 automatic retries from the task's `openProject`, plus session recovery |
+
+**Starting at Task 1 when later tasks are already done.** Every task checks SAP before it writes:
+
+| Task | What is checked first | When it is already there |
+|---|---|---|
+| 1 | Project exists | Creation skipped, WBS kept |
+| 2 | Each activity row, 0045 service flag, 0135 cost | Rows left, "already exists", "left unchanged"; save reports "Data not changed" |
+| 4 | Predecessors per activity | "(already present)", nothing added |
+| 6 | PS text node, milestone usage and flags | Left, only missing flags ticked |
+| 7 | System status REL | Task skipped |
+| 10 | Field values | Only differing fields typed |
+| 11, 13 | Cost report actual on 8000000 / 6300000 | Whole task skipped, no second posting |
+
+Checked live: tasks 2, 4, 6 run a second time changed nothing, and tasks 11 and 13 run a second time skipped on 1,750.00 and 9,700.00 actual.
+
+**Durability**
+- The runner updates itself when idle (1.3.2 to 1.3.3 to 1.3.4 happened with no login on the VM).
+- A job the runner no longer holds after a restart is closed by the site, so the account is never blocked.
+- The Oracle runner holds the LEARN-636 password in `runner/.env` (mode 600), so a run needs no password on the site.
+
+**Tests:** `runner/dev/treecheck.mjs` all pass (new cases D: scrolled virtual tree, E: hidden aria span). `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22.
+
+**Not confirmed:** a run on a LEARN account that has never had a project (a "fresh" Task 1 create on 1.3.4). LEARN-641 passed that path on 1.3.1 (run #25); P/2636 already existed before this session, so Task 1 creation was not exercised for 636.
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.
