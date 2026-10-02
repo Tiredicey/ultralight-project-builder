@@ -504,6 +504,8 @@ An idle runner (no job) still wrote ~1,200 rows/hour from claim polls. Job #33 o
 
 **Not confirmed:** Firefox and Safari (only Chromium was run); real phones (only a 390 px emulated viewport).
 
+See `docs/DESIGN-SOURCES.md` for checked design, motion and agent-skill sources (2026-10-02).
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.
