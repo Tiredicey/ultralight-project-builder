@@ -491,6 +491,19 @@ An idle runner (no job) still wrote ~1,200 rows/hour from claim polls. Job #33 o
 - The live site could not be tested at the real limit after the fix: today's allowance was already used up and resets at 00:00 UTC 2026-10-02.
 - Whether the other three databases on the account (`gawk-capstone-sti-lipa-db`, `radartrack`, `radar`) used part of today's writes. The dashboard screenshot shows they ran 79, 8 and 0 queries, so `ultralight-builder-production` (289.13k queries) is almost certainly the main source, but per-database write counts were not visible.
 
+## Display fixes (2026-10-02)
+
+| Problem | Cause | Fix | File |
+|---|---|---|---|
+| Owner console "Database allowance today" rows squashed to a thin line, labels cut off (owner screenshot) | The rows used class `meter`, already defined in `fx.css` as an 8 px bar with `overflow: hidden` | Rows renamed `usage-row` with their own layout; numbers use tabular figures; wraps on phones | `public/static/app.js`, `style.css` |
+| Card said "all 2 D1 databases" | Cloudflare analytics only lists databases that ran queries that day | Says "(2 D1 databases used today)" | `app.js` |
+| Phone: limit banner filled about a fifth of the screen and stayed pinned | Long text, `position: sticky` | Under 640 px it shows one short line and scrolls away; Hide is remembered for the tab until the reset | `app.js`, `style.css` |
+| Phone: top menu showed "pack" instead of "Run pack" | Active tab scrolled into view with `offsetLeft`, which is measured from the page, not the menu | Position measured relative to the menu | `app.js` |
+
+**Checks (sandbox, Chromium 153 via Playwright, wrangler + local D1):** `runner/dev/sitecheck.mjs` dark, light, phone 390 px and reduced motion: 0 script errors, one `<h1>` and no sideways scroll on every page. `runner/dev/extrascheck.mjs` 80/80. Usage card at 1440 px and 390 px with 87,420 rows written: both rows 32 px / 54 px tall, nothing clipped, bar turns amber above 80%. Active phone tab fully visible on all 9 pages. Banner visible and hideable at 390 px dark and 1440 px light. `e2e-quota.sh` 26/26, `e2e-local.sh` 13/13, `e2e-features.sh` 22/22.
+
+**Not confirmed:** Firefox and Safari (only Chromium was run); real phones (only a 390 px emulated viewport).
+
 ## Stack
 
 Hono 4 on Cloudflare Pages, D1, vanilla ES modules frontend (no framework, Geist type), Playwright 1.63 runner.

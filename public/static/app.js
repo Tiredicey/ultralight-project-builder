@@ -30,16 +30,18 @@ function quotaBanner(q) {
     el.className = 'quota-banner'
     el.setAttribute('role', 'status')
     el.innerHTML = '<div class="quota-text"><b></b><span></span></div><div class="quota-actions"><button class="btn sm" type="button" data-q="retry">Try again</button><button class="btn sm ghost" type="button" data-q="hide">Hide</button></div>'
-    el.querySelector('[data-q="hide"]').onclick = () => { el.hidden = true }
+    el.querySelector('[data-q="hide"]').onclick = () => { el.hidden = true; try { sessionStorage.setItem('uc_quota_hidden', el.dataset.until) } catch {} }
     el.querySelector('[data-q="retry"]').onclick = () => location.reload()
     document.body.prepend(el)
   }
   el.dataset.until = String(Math.max(Number(el.dataset.until) || 0, until))
+  try { if (sessionStorage.getItem('uc_quota_hidden') === el.dataset.until) el.hidden = true } catch {}
   el.querySelector('b').textContent = q.code === 'D1_READ_LIMIT' ? 'Database read allowance used up for today' : 'Saving is paused until 00:00 UTC'
   const tick = () => {
     const left = Number(el.dataset.until) - Date.now()
     if (left <= 0) { clearInterval(quotaTimer); el.remove(); return }
     const h = Math.floor(left / 36e5), m = Math.max(1, Math.ceil((left % 36e5) / 6e4))
+    el.querySelector('span').dataset.short = `Viewing works. Saving resumes in ${h ? `${h} h ` : ''}${m} min.`
     el.querySelector('span').textContent = `Cloudflare's free daily database allowance is reached. You can still sign in and view runs, evidence, the task sheet and project data. New runs, approvals and settings save again in ${h ? `${h} h ` : ''}${m} min (${new Date(Number(el.dataset.until)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} your time). The runner keeps working in SAP and reports less often until then.`
   }
   tick()
@@ -219,7 +221,7 @@ function renderShell() {
   document.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => go(b.dataset.v)))
   document.querySelectorAll('[data-theme-btn]').forEach((b) => { b.onclick = toggleTheme })
   paintThemeBtns()
-  const cur = $('.topbar [aria-current="page"]'); if (cur) cur.parentElement.scrollLeft = cur.offsetLeft - 8
+  const cur = $('.topbar [aria-current="page"]'); if (cur) { const nav = cur.parentElement; nav.scrollLeft = Math.max(0, nav.scrollLeft + cur.getBoundingClientRect().left - nav.getBoundingClientRect().left - 8) }
   $('#logout').onclick = logout
   $('#logout2').onclick = logout
   const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin, export: viewExport }
@@ -981,14 +983,14 @@ async function viewAdmin() {
   document.querySelectorAll('[data-savelimit]').forEach((b) => b.addEventListener('click', run(async () => { const v = document.querySelector(`[data-limit="${b.dataset.savelimit}"]`).value; const r = await http(`/admin/runners/${b.dataset.savelimit}`, { method: 'PUT', body: { accounts: v } }); toast(r.accounts.length ? `Runner limited to ${r.accounts.join(', ')}` : 'Runner may drive all accounts'); refresh() })))
 }
 
-const meter = (label, used, cap) => { const pct = Math.min(100, Math.round((used / cap) * 1000) / 10); return `<div class="meter ${pct >= 100 ? 'full' : pct >= 80 ? 'high' : ''}"><div class="row" style="justify-content:space-between"><span>${label}</span><span class="mono">${used.toLocaleString()} / ${cap.toLocaleString()} · ${pct}%</span></div><div class="progress" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div></div>` }
+const meter = (label, used, cap) => { const pct = Math.min(100, Math.round((used / cap) * 1000) / 10); return `<div class="usage-row ${pct >= 100 ? 'full' : pct >= 80 ? 'high' : ''}"><div class="row" style="justify-content:space-between"><span>${label}</span><span class="mono">${used.toLocaleString()} / ${cap.toLocaleString()} · ${pct}%</span></div><div class="progress" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div></div>` }
 async function paintUsage() {
   if (!$('#usage-body')) return
   const u = await http('/admin/usage').catch((e) => ({ error: e.message }))
   const el = $('#usage-body'); if (!el) return
   if (u.resetsAt) $('#usage-reset').textContent = `Resets ${new Date(u.resetsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} your time (00:00 UTC)`
   const hit = u.quota ? '<p class="pill err" style="width:fit-content">Limit reached today: saving resumes at 00:00 UTC</p>' : ''
-  if (u.total) { el.className = 'stack'; el.innerHTML = `${hit}${meter('Rows written (free plan: 100,000 per day)', u.total.rowsWritten, u.limits.rowsWritten)}${meter('Rows read (free plan: 5,000,000 per day)', u.total.rowsRead, u.limits.rowsRead)}<p class="small muted">Whole Cloudflare account, all ${u.databases.length} D1 databases, from Cloudflare analytics (the same source as the dashboard). Updated every minute; analytics can lag a few minutes behind.</p>`; return }
+  if (u.total) { el.className = 'stack'; el.innerHTML = `${hit}${meter('Rows written (free plan: 100,000 per day)', u.total.rowsWritten, u.limits.rowsWritten)}${meter('Rows read (free plan: 5,000,000 per day)', u.total.rowsRead, u.limits.rowsRead)}<p class="small muted">Whole Cloudflare account (${u.databases.length} D1 ${u.databases.length === 1 ? 'database' : 'databases'} used today), from Cloudflare analytics (the same source as the dashboard). Updated every minute; analytics can lag a few minutes behind.</p>`; return }
   el.className = 'stack small'
   el.innerHTML = `${hit}${u.error ? `<p class="pill warn" style="width:fit-content">${esc(u.error)}</p>` : ''}<p class="muted">${u.configured ? 'Cloudflare analytics did not answer.' : 'Live numbers are off. Add two Cloudflare Pages secrets, <code>CF_ACCOUNT_ID</code> and <code>CF_ANALYTICS_TOKEN</code> (token permission: Account Analytics, Read), then redeploy. SETUP.md, section "Usage meter", has the steps.'} The same numbers are on dash.cloudflare.com under Storage &amp; databases, D1 SQL Database, Usage.</p>`
 }

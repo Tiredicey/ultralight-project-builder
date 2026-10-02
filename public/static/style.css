@@ -261,6 +261,14 @@ video.demo { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r); backgro
 .quota-banner .quota-text { display: grid; gap: .15rem; max-width: 76ch; }
 .quota-banner b { color: var(--warn); font-weight: 600; }
 .quota-banner .quota-actions { display: flex; gap: .5rem; flex-shrink: 0; }
-.meter { display: grid; gap: .35rem; font-size: .88rem; }
-.meter.high .progress i { background: var(--warn); }
-.meter.full .progress i { background: var(--err); }
+.usage-row { display: grid; gap: .4rem; font-size: .88rem; }
+.usage-row > .row { flex-wrap: wrap; gap: .25rem .75rem; }
+.usage-row .mono { font-variant-numeric: tabular-nums; }
+.usage-row.high .progress i { background: var(--warn); }
+.usage-row.full .progress i { background: var(--err); }
+#usage-reset { text-align: right; }
+@media (max-width: 640px) {
+  .quota-banner { position: relative; padding: .6rem .85rem; gap: .5rem; font-size: .84rem; }
+  .quota-banner .quota-text span { font-size: 0; }
+  .quota-banner .quota-text span::after { content: attr(data-short); font-size: .84rem; }
+}
