@@ -537,7 +537,7 @@ Three charts were added. Each one is drawn from data the site already has, so no
 | Problem seen on the live site | Cause | Fix |
 |---|---|---|
 | Run #30: tasks 7, 11 and 13 showed as grey "not started" tiles, but SAP already had them | The runner skips a task that is already in SAP and logs "Task N: already done in SAP". The ribbon only counted step results | Those tasks get their own tile: green text, dashed border, labelled "already in SAP, skipped" |
-| Runs and evidence at 390 px scrolled 96 px sideways | The detail column kept its inline `grid-column: span 2` after the grid dropped to one column, which created a second, 0 px column (`345px 0px`, read from the live page) | Below 1000 px, every `.grid3` child takes one column |
+| Runs and evidence at 390 px scrolled 96 px sideways | Two causes, both read from the live page. First, the detail column kept its inline `grid-column: span 2` after the grid dropped to one column, which made a second, 0 px column (`345px 0px`). Second, grid items default to `min-width: auto`, so the wide run summary line and screenshot (469 px) pushed the column past the 360 px screen | Below 1000 px, every `.grid3` child takes one column. Grid children get `min-width: 0`. On the live page, adding only the second rule took the overflow from 96 px to 0 |
 
 Checked in the sandbox with a seeded 84-step run (task 7 skipped as in SAP) and a run with 3 screenshots, in dark, light, 390 px phone and reduced motion: 0 script errors, 0 px sideways scroll on all three pages, task 7 tile shown as already in SAP. `npm run check`, `e2e-local.sh` 13/13, `e2e-features.sh` 22/22, `extrascheck.mjs` 80/80.
 
