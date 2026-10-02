@@ -219,3 +219,5 @@ tr.x-flash td { animation: xflash 1.6s ease-out; }
 .gantt-key i.zero { width: .55rem; height: .55rem; transform: rotate(45deg); background: var(--surface); border: 1.4px solid var(--muted); border-radius: 1px; }
 @media (prefers-reduced-motion: reduce) { .step.x-flash { animation: none; background: var(--accent-soft); } }
 @media print { .ribbon, .runbar-key { display: none !important; } }
+.rb.sap button { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); background: transparent; border-style: dashed; }
+@media (max-width: 1000px) { .grid3 > * { grid-column: auto !important; } }

@@ -532,9 +532,17 @@ Three charts were added. Each one is drawn from data the site already has, so no
 - The schedule has 16 rows. Its 11 zero-float bars are the same 11 activities the network header lists. The project is 42 days long.
 - `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22, `scripts/e2e-quota.sh` 26/26 (on a fresh local DB, as that script requires), `runner/dev/extrascheck.mjs` 80/80, `runner/dev/sitecheck.mjs` all 4 modes clean, `npm run check`.
 
+**Follow-up fixes after checking the live site (same day):**
+
+| Problem seen on the live site | Cause | Fix |
+|---|---|---|
+| Run #30: tasks 7, 11 and 13 showed as grey "not started" tiles, but SAP already had them | The runner skips a task that is already in SAP and logs "Task N: already done in SAP". The ribbon only counted step results | Those tasks get their own tile: green text, dashed border, labelled "already in SAP, skipped" |
+| Runs and evidence at 390 px scrolled 96 px sideways | The detail column kept its inline `grid-column: span 2` after the grid dropped to one column, which created a second, 0 px column (`345px 0px`, read from the live page) | Below 1000 px, every `.grid3` child takes one column |
+
+Checked in the sandbox with a seeded 84-step run (task 7 skipped as in SAP) and a run with 3 screenshots, in dark, light, 390 px phone and reduced motion: 0 script errors, 0 px sideways scroll on all three pages, task 7 tile shown as already in SAP. `npm run check`, `e2e-local.sh` 13/13, `e2e-features.sh` 22/22, `extrascheck.mjs` 80/80.
+
 **Not confirmed:**
 - Firefox, Safari and real phones. Only Chromium was run, and the phone was a 390 px emulated screen.
-- The live site after this push. Cloudflare Pages rebuilds from `main`; whether that rebuild finished was not checked from here.
 
 
 ## Stack

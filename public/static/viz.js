@@ -1,6 +1,7 @@
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 
-export function taskProgress(steps, status, curIdx, live) {
+export function taskProgress(steps, status, curIdx, live, events = []) {
+  const inSap = new Set(events.filter((e) => e.level === 'info' && /^Task \d+: already done in SAP/.test(e.message || '')).map((e) => Number(e.message.match(/^Task (\d+)/)[1])))
   const by = new Map()
   steps.forEach((s, i) => {
     const t = by.get(s.task) || { task: s.task, total: 0, ok: 0, err: 0, warn: 0, first: s.key, cur: false }
@@ -12,15 +13,15 @@ export function taskProgress(steps, status, curIdx, live) {
     if (live && i === curIdx) t.cur = true
     by.set(s.task, t)
   })
-  return [...by.values()]
+  return [...by.values()].map((t) => (inSap.has(t.task) && !t.err ? { ...t, sap: true } : t))
 }
 
 export function ribbon(list, titles = {}) {
   if (!list.length) return ''
-  const state = (t) => (t.err ? 'err' : t.cur ? 'cur' : t.ok + t.warn >= t.total ? (t.warn ? 'warn' : 'ok') : t.ok + t.warn ? 'part' : 'todo')
-  const word = { err: 'failed', cur: 'running', ok: 'verified', warn: 'check', part: 'in part', todo: 'not started' }
+  const state = (t) => (t.err ? 'err' : t.cur ? 'cur' : t.sap ? 'sap' : t.ok + t.warn >= t.total ? (t.warn ? 'warn' : 'ok') : t.ok + t.warn ? 'part' : 'todo')
+  const word = { err: 'failed', cur: 'running', sap: 'already in SAP, skipped', ok: 'verified', warn: 'check', part: 'in part', todo: 'not started' }
   return `<ol class="ribbon" aria-label="Tasks in this run">${list.map((t) => {
-    const s = state(t), done = t.ok + t.warn
+    const s = state(t), done = s === 'sap' ? t.total : t.ok + t.warn
     const label = `Task ${t.task}${titles[t.task] ? `, ${titles[t.task]}` : ''}: ${word[s]}, ${done} of ${t.total} steps`
     return `<li class="rb ${s}" style="--p:${Math.round((done / t.total) * 100)}%"><button type="button" data-rb="${esc(t.first)}" title="${esc(label)}" aria-label="${esc(label)}"><b>${t.task}</b><i aria-hidden="true"></i></button></li>`
   }).join('')}</ol>`

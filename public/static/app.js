@@ -479,7 +479,7 @@ function paintJob() {
     if (rb) {
       const titles = Object.fromEntries((S.pack?.tasks || []).map((t) => [t.id, t.title]))
       const had = rb.contains(document.activeElement) ? document.activeElement.dataset.rb : null
-      rb.innerHTML = ribbon(taskProgress(steps, status, j.step_idx, live), titles)
+      rb.innerHTML = ribbon(taskProgress(steps, status, j.step_idx, live, S.events), titles)
       if (had) rb.querySelector(`[data-rb="${had}"]`)?.focus()
       rb.onclick = (e) => { const b = e.target.closest('[data-rb]'); if (!b) return; const row = [...stepsEl.children].find((x) => x.querySelector('.k')?.textContent === b.dataset.rb); if (!row) return; S.stepsTouched = Date.now(); stepsEl.scrollTop = row.offsetTop - stepsEl.offsetTop; row.classList.remove('x-flash'); void row.offsetWidth; row.classList.add('x-flash') }
     }
