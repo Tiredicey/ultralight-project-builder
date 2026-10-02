@@ -504,7 +504,38 @@ An idle runner (no job) still wrote ~1,200 rows/hour from claim polls. Job #33 o
 
 **Not confirmed:** Firefox and Safari (only Chromium was run); real phones (only a 390 px emulated viewport).
 
-See `docs/DESIGN-SOURCES.md` for checked design, motion and agent-skill sources (2026-10-02).
+## Visuals pass (2026-10-02)
+
+Three charts were added. Each one is drawn from data the site already has, so no figure is new or estimated. `public/static/viz.js` makes plain SVG and HTML, with no chart library.
+
+| Where | What you see | Data it comes from |
+|---|---|---|
+| Live canvas, Steps card | A task ribbon: one tile per task in the run, coloured verified, check, failed, running or not started, with a bar for steps done. Clicking a tile scrolls the step list to that task's first step. Each tile has a label like "Task 6, PS text and milestones: failed, 9 of 12 steps" | The run's plan steps and the level of each step's event (`ok`, `warn`, `error`) |
+| Runs and evidence | Every run row shows its mode and how long it took, plus a stacked bar: verified, skipped (already in SAP), by operator, failed. A key sits under the table. The run you opened is highlighted | `jobs.result` (`ok`, `skipped`, `manual`, `failed`), `step_total`, `started_at`, `finished_at`. A run that is still going shows `step_idx` of `step_total` |
+| Project data | A schedule chart (Gantt) for all 16 activities in working days. Bars with zero float use the accent colour. A dashed line shows float up to the late finish. 0045 and 0135 have no duration, so they show as diamonds | The same CPM pass (`cpm()`) and 22 finish-to-start links as the network plan above it |
+
+**Design rules followed** (`facts.txt` sections 21.2, 21.5, 23 and COMPANION C4, C5): one accent colour, no new fonts or radii, only background and border colours animate, touch targets at least 44 px, reduced motion turns off the flash, and the charts are hidden when printing.
+
+**Contrast (WCAG 2.x formula) for the new colour pairs:**
+
+| Pair | Light | Dark |
+|---|---|---|
+| Verified tile text / tile | 5.12 | 6.27 |
+| Check tile text / tile | 4.71 | 6.73 |
+| Failed tile text / tile | 5.47 | 6.02 |
+| Running tile text / accent | 5.94 | 7.91 |
+| Chart labels (muted) / striped row | 5.05 | 5.70 |
+
+**Checks (sandbox, Chromium 153 through Playwright 1.63, wrangler dev with local D1, a seeded 84-step Autopilot run):**
+- At 1440 px dark and light, 390 px phone, and with reduced motion: 0 script errors, one `<h1>`, and no sideways scrolling on the canvas, runs and project data pages.
+- The ribbon shows 14 tiles, all at least 44 px tall. Clicking task 12 put step 12.1 at the top of the list, and it was still there 3.5 s later, after two polls.
+- The schedule has 16 rows. Its 11 zero-float bars are the same 11 activities the network header lists. The project is 42 days long.
+- `scripts/e2e-local.sh` 13/13, `scripts/e2e-features.sh` 22/22, `scripts/e2e-quota.sh` 26/26 (on a fresh local DB, as that script requires), `runner/dev/extrascheck.mjs` 80/80, `runner/dev/sitecheck.mjs` all 4 modes clean, `npm run check`.
+
+**Not confirmed:**
+- Firefox, Safari and real phones. Only Chromium was run, and the phone was a 390 px emulated screen.
+- The live site after this push. Cloudflare Pages rebuilds from `main`; whether that rebuild finished was not checked from here.
+
 
 ## Stack
 

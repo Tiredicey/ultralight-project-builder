@@ -175,3 +175,47 @@ tr.x-flash td { animation: xflash 1.6s ease-out; }
 @keyframes xflash { from { background: var(--accent-soft); } to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { tr.x-flash td { animation: none; background: var(--accent-soft); } .net.x-focus .node, .net.x-focus path, .x-copy { transition: none; } }
 @media print { .x-filter, .x-chips, .x-runbar, .x-tick, .x-sheet-tools, .x-guide-meter, .x-pre-copy, .x-step { display: none !important; } }
+
+.ribbon { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(2.1rem, 1fr)); gap: 4px; }
+.rb button { width: 100%; min-height: 44px; min-width: 24px; display: grid; align-content: center; justify-items: center; gap: 4px; padding: .3rem 0 .35rem; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--muted); cursor: pointer; font: 600 .78rem/1 var(--mono); font-variant-numeric: tabular-nums; transition: border-color .15s, background-color .15s; }
+.rb button:hover { border-color: color-mix(in srgb, var(--text) 25%, var(--line)); }
+.rb i { display: block; width: 70%; height: 3px; border-radius: 99px; background: linear-gradient(90deg, currentColor var(--p), color-mix(in srgb, currentColor 18%, transparent) var(--p)); }
+.rb.ok button { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: var(--ok-soft); }
+.rb.warn button { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); background: var(--warn-soft); }
+.rb.err button { color: var(--err); border-color: var(--err); background: var(--err-soft); }
+.rb.part button { color: var(--accent); }
+.rb.cur button { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.rb.cur i { background: linear-gradient(90deg, currentColor var(--p), color-mix(in srgb, currentColor 30%, transparent) var(--p)); }
+.step.x-flash { animation: xflashStep 1.6s ease-out; }
+@keyframes xflashStep { from { background: var(--accent-soft); } }
+
+.runbar { display: flex; width: 4.5rem; height: 4px; margin-top: .35rem; border-radius: 99px; overflow: hidden; background: var(--surface-2); }
+.runbar i, .runbar-key i { display: block; height: 100%; }
+.runbar .ok, .runbar-key .ok { background: var(--ok); }
+.runbar .sk, .runbar-key .sk { background: color-mix(in srgb, var(--ok) 40%, var(--surface-2)); }
+.runbar .man, .runbar-key .man { background: var(--warn); }
+.runbar .fail, .runbar-key .fail { background: var(--err); }
+.runbar-key { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; margin-top: .7rem; }
+.runbar-key i { width: .7rem; height: .3rem; border-radius: 99px; display: inline-block; }
+.runs-t tr.sel td { background: var(--accent-soft) !important; }
+.runs-t tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+.gantt { display: block; max-width: none; height: auto; font-family: var(--sans); }
+.gantt .g-band { fill: transparent; }
+.gantt .g-row:nth-child(even) .g-band { fill: var(--surface-2); }
+.gantt .g-row:hover .g-band { fill: var(--accent-soft); }
+.gantt .g-tick { stroke: var(--line); stroke-width: 1; }
+.gantt .g-ax { fill: var(--muted); font: 500 10px var(--mono); }
+.gantt .g-id { fill: var(--text); font: 600 11px var(--mono); }
+.gantt .g-desc { fill: var(--muted); font: 400 11px var(--sans); }
+.gantt .g-bar { fill: color-mix(in srgb, var(--muted) 55%, var(--surface)); }
+.gantt .g-bar.crit { fill: var(--accent); }
+.gantt .g-zero { fill: var(--surface); stroke: var(--muted); stroke-width: 1.4; }
+.gantt .g-float { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.gantt-key { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; }
+.gantt-key i { display: inline-block; width: .9rem; height: .5rem; border-radius: 2px; background: color-mix(in srgb, var(--muted) 55%, var(--surface)); }
+.gantt-key i.crit { background: var(--accent); }
+.gantt-key i.fl { height: 0; border-top: 1.5px dashed var(--muted); background: none; border-radius: 0; }
+.gantt-key i.zero { width: .55rem; height: .55rem; transform: rotate(45deg); background: var(--surface); border: 1.4px solid var(--muted); border-radius: 1px; }
+@media (prefers-reduced-motion: reduce) { .step.x-flash { animation: none; background: var(--accent-soft); } }
+@media print { .ribbon, .runbar-key { display: none !important; } }

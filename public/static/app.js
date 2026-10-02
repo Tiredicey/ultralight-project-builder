@@ -2,6 +2,7 @@ import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName, EXPORT_PAR
 import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
 import { hero, mountBackdrop, reveal, typeLine, countUp, transition, media } from './fx.js'
 import { enhance, openShortcuts } from './extras.js'
+import { taskProgress, ribbon, runBar, duration, gantt } from './viz.js'
 const $ = (s, r = document) => r.querySelector(s)
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '')
@@ -315,6 +316,7 @@ async function viewCanvas() {
   }
   const id = S.pendingJob || S.job.id
   S.pendingJob = null
+  if (!S.pack) S.pack = await http('/pack').catch(() => null)
   S.lastEvent = S.job && S.job.id === id ? S.lastEvent : 0
   await loadJob(id)
   if (location.hash.slice(1) !== `canvas/${id}`) history.replaceState(null, '', `#canvas/${id}`)
@@ -348,7 +350,7 @@ async function viewCanvas() {
     </section>
     <aside class="panel">
       <div id="prompt"></div>
-      <div class="card stack"><div class="row" style="justify-content:space-between"><h3>Steps</h3><span class="small muted" id="stepCount"></span></div><div class="progress"><i id="bar"></i></div><div class="steps" id="steps"></div></div>
+      <div class="card stack"><div class="row" style="justify-content:space-between"><h3>Steps</h3><span class="small muted" id="stepCount"></span></div><div class="progress"><i id="bar"></i></div><div id="ribbon"></div><div class="steps" id="steps"></div></div>
       <div class="card stack"><h3>Activity log</h3><div class="log" id="log"></div></div>
     </aside>
   </div>`
@@ -473,6 +475,14 @@ function paintJob() {
   const stepSig = `${j.step_idx}|${j.status}|${S.events.length}|${steps.length}`
   if (stepsEl.dataset.sig !== stepSig) {
     stepsEl.dataset.sig = stepSig
+    const rb = $('#ribbon')
+    if (rb) {
+      const titles = Object.fromEntries((S.pack?.tasks || []).map((t) => [t.id, t.title]))
+      const had = rb.contains(document.activeElement) ? document.activeElement.dataset.rb : null
+      rb.innerHTML = ribbon(taskProgress(steps, status, j.step_idx, live), titles)
+      if (had) rb.querySelector(`[data-rb="${had}"]`)?.focus()
+      rb.onclick = (e) => { const b = e.target.closest('[data-rb]'); if (!b) return; const row = [...stepsEl.children].find((x) => x.querySelector('.k')?.textContent === b.dataset.rb); if (!row) return; S.stepsTouched = Date.now(); stepsEl.scrollTop = row.offsetTop - stepsEl.offsetTop; row.classList.remove('x-flash'); void row.offsetWidth; row.classList.add('x-flash') }
+    }
     const keep = stepsEl.scrollTop
     stepsEl.innerHTML = steps.map((s, i) => { const st = status[s.key]; const c = i === j.step_idx && live ? 'cur' : st === 'ok' ? 'ok' : st === 'error' ? 'err' : st === 'warn' ? 'warn' : ''; return `<div class="step ${c}" data-i="${i}"><span class="k">${s.key}</span><span>${esc(s.label || s.op)}</span><span class="s small">${st === 'ok' ? 'done' : st === 'error' ? 'failed' : st === 'warn' ? 'check' : s.op === 'manual' ? 'you' : ''}</span></div>` }).join('')
     stepsEl.scrollTop = keep
@@ -527,9 +537,10 @@ async function viewJobs() {
   ${hero('jobs', { title: 'Runs and <span class="grad">evidence</span>', text: 'Every screenshot and DOM capture a run produced, labelled by task and transaction. Use <b>Export submission</b> to put them into a finished Word file in one click.', actions: S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : '' })}
   <div class="grid3">
     <section class="card scroll" style="grid-column:span 1">
-      <table class="t"><thead><tr><th>#</th><th>Account</th><th>Status</th><th>When</th></tr></thead><tbody>
-      ${S.jobs.map((j) => `<tr><td><button class="btn sm ghost" data-j="${j.id}">${j.id}</button></td><td>${esc(j.sap_user)}${all ? `<div class="small muted">${esc(j.email)}</div>` : ''}</td><td><span class="pill ${j.status === 'done' ? 'ok' : ['failed', 'aborted'].includes(j.status) ? 'err' : 'accent'}">${esc(j.status)}</span></td><td class="small muted">${esc(ago(j.created_at))}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}
+      <table class="t runs-t"><thead><tr><th>#</th><th>Account</th><th>Status</th><th>When</th></tr></thead><tbody>
+      ${S.jobs.map((j) => `<tr${detail && detail.job.id === j.id ? ' class="sel" aria-current="true"' : ''}><td><button class="btn sm ghost" data-j="${j.id}">${j.id}</button></td><td>${esc(j.sap_user)}<div class="small muted">${esc(j.mode)}${duration(j) ? ` · ${esc(duration(j))}` : ''}</div>${all ? `<div class="small muted">${esc(j.email)}</div>` : ''}</td><td><span class="pill ${j.status === 'done' ? 'ok' : ['failed', 'aborted'].includes(j.status) ? 'err' : 'accent'}">${esc(j.status)}</span>${runBar(j)}</td><td class="small muted">${esc(ago(j.created_at))}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}
       </tbody></table>
+      ${S.jobs.length ? '<p class="small muted runbar-key"><i class="ok"></i>verified <i class="sk"></i>skipped, already in SAP <i class="man"></i>by operator <i class="fail"></i>failed</p>' : ''}
     </section>
     <section class="stack" style="grid-column:span 2">
       ${detail ? `
@@ -682,6 +693,11 @@ async function viewPlan() {
     <div class="row" style="justify-content:space-between"><h2>Network plan</h2><span class="small muted">Zero-float activities ${[...c.crit].filter((n) => Number(acts.find((a) => a.act === n).dur) > 0).sort().join(', ')} · project length ${c.end} working days</span></div>
     <div class="scroll">${svg}</div>
     <p class="small muted">0045 and 0135 carry no normal duration in the task sheet, so they show as zero-length here. In SAP, 0135 becomes flexible in Task 10 and stretches to match 0130.</p>
+  </section>
+  <section class="card stack" style="margin-bottom:1rem">
+    <div class="row" style="justify-content:space-between"><h2>Schedule</h2><span class="small muted gantt-key"><i class="crit"></i>zero float <i></i>has float <i class="fl"></i>float to late finish <i class="zero"></i>no duration</span></div>
+    <div class="scroll">${gantt(acts, c)}</div>
+    <p class="small muted">Working days from project start, earliest dates, from the same 22 finish-to-start links as the network above. Hover a bar for its dates and float.</p>
   </section>
   <div class="grid2">
     <section class="card scroll"><h2>WBS and responsibilities</h2><table class="t"><thead><tr><th>Lvl</th><th>WBS</th><th>Description</th><th>Resp. cost centre</th></tr></thead><tbody>${d.wbs.map((w) => `<tr><td>${w.level}</td><td class="mono">${esc(w.wbs)}</td><td>${esc(w.desc)}</td><td class="mono">${w.costCenter}</td></tr>`).join('')}</tbody></table></section>
