@@ -1,9 +1,9 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
-import { VIEW, webgui, settle, captureDom, statusbar, popupText, login, gotoTxn, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups } from './sap.mjs'
+import { VIEW, webgui, fioriUrl, settle, captureDom, statusbar, popupText, login, gotoTxn, openFioriApp, captureVar, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups } from './sap.mjs'
 
-const VERSION = '1.0.0'
+const VERSION = '1.1.0'
 if (existsSync(new URL('../.env', import.meta.url))) {
   for (const line of readFileSync(new URL('../.env', import.meta.url), 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/)
@@ -14,6 +14,7 @@ if (existsSync(new URL('../.env', import.meta.url))) {
 const CONTROL = (process.env.CONTROL_URL || '').replace(/\/$/, '')
 const TOKEN = process.env.RUNNER_TOKEN || ''
 const SAP_HOST = process.env.SAP_HOST || 'm53p.ucc.cloud'
+const SAP_HOST_FALLBACK = process.env.SAP_HOST_FALLBACK || 'm42p.ucc.cloud'
 const SAP_CLIENT = process.env.SAP_CLIENT || '236'
 const HEADLESS = process.env.HEADLESS !== 'false'
 const LOCAL = Object.fromEntries((process.env.SAP_ACCOUNTS || '').split(',').map((s) => s.trim()).filter(Boolean).map((s) => { const i = s.indexOf(':'); return i > 0 ? [s.slice(0, i).toUpperCase(), s.slice(i + 1)] : [s.toUpperCase(), ''] }))
@@ -38,7 +39,7 @@ class Job {
     this.steps = plan.steps; this.idx = 0; this.status = 'running'; this.prompt = null
     this.events = []; this.paused = false
     this.stepOnce = false; this.aborted = false; this.seq = 0; this.lastHash = ''; this.lastFrameAt = 0; this.activeAt = Date.now(); this.target = null
-    this.ctx = { host: SAP_HOST, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '' }
+    this.ctx = { host: SAP_HOST, fallbackHost: SAP_HOST_FALLBACK, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '', entry: plan.entry || 'webgui', vars: {} }
     this.results = { ok: 0, failed: 0, manual: 0, skipped: 0 }
   }
 
@@ -53,12 +54,16 @@ class Job {
     this.frameLoop = this.loopFrames()
     try {
       await this.flush('running')
-      if (!this.ctx.password) { await this.page.goto(webgui(SAP_HOST, SAP_CLIENT), { waitUntil: 'domcontentloaded', timeout: 60000 }); await settle(this.page, 1000); await this.handoff({ title: 'SAP password needed', instruction: `No password for ${this.ctx.user}. Log in on the canvas yourself, then press Done.` }, 'login') }
-      else {
+      if (!this.ctx.password) {
+        const entryUrl = this.ctx.entry === 'flp' ? fioriUrl(this.ctx.host, this.ctx.client) : webgui(this.ctx.host, this.ctx.client)
+        await this.page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+        await settle(this.page, 1000)
+        await this.handoff({ title: 'SAP password needed', instruction: `No password for ${this.ctx.user}. Log in on the canvas yourself, then press Done.` }, 'login')
+      } else {
         const r = await login(this.page, this.ctx)
         if (!r.ok && r.needsHuman) await this.handoff({ title: 'SAP needs you at login', instruction: r.reason }, 'login')
         else if (!r.ok) { this.ev('error', r.reason, 'login'); await this.handoff({ title: 'Login failed', instruction: `${r.reason}. Log in on the canvas or abort.`, error: r.reason }, 'login') }
-        else this.ev('ok', `Logged in as ${this.ctx.user} on ${SAP_HOST} client ${SAP_CLIENT}`, 'login', { statusbar: await statusbar(this.page) })
+        else this.ev('ok', `Logged in as ${this.ctx.user} on ${this.ctx.host} client ${SAP_CLIENT} (${this.ctx.entry})`, 'login', { statusbar: await statusbar(this.page) })
       }
       this.ctx.password = ''
       while (this.idx < this.steps.length && !this.aborted) {
@@ -72,7 +77,7 @@ class Job {
         else if (out.skipped) { this.results.skipped++; this.ev('warn', `Skipped: ${out.reason || s.label}`, s.key); this.idx++ }
         else {
           this.ev('error', out.reason || 'Step failed', s.key, { statusbar: await statusbar(this.page), popup: await popupText(this.page) })
-          const d = await this.handoff({ title: `Step ${s.key} needs you`, instruction: `${s.label}. Automation could not finish this. Fix it on the canvas and press Done, or retry.`, error: out.reason, values: s.values || valuesOf(s) }, s.key)
+          const d = await this.handoff({ title: `Step ${s.key} needs you`, instruction: `${s.label}. Automation could not finish this. Fix it on the canvas and press Done, or retry.`, error: out.reason, values: s.values || valuesOf(s, this.ctx.vars) }, s.key)
           if (d === 'retry') continue
           if (d === 'skip') { this.results.skipped++; this.idx++; continue }
           this.results.manual++; this.ev('warn', 'Marked done by operator, not verified by automation', s.key, { statusbar: await statusbar(this.page) }); this.idx++
@@ -172,7 +177,7 @@ class Job {
     this.ev('ok', `Evidence captured: ${caption}`, null)
   }
 
-  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss'].includes(s.op) }
+  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'fioriApp', 'captureVar', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss'].includes(s.op) }
 
   async verify(note, extra = {}) {
     const sb = await statusbar(this.page)
@@ -182,16 +187,25 @@ class Job {
 
   async exec(s) {
     const p = this.page, d = this.plan.data
+    const sub = (v) => subst(v, this.ctx.vars)
     this.target = null
     if (this.observeBlocked(s)) return { skipped: true, reason: `${s.label} (observe mode is read-only)` }
     if (s.op === 'manual') {
       if (s.optional && this.job.mode === 'auto') return { skipped: true, reason: `${s.label} is optional` }
-      const dcs = await this.handoff({ title: s.label, instruction: s.instruction, values: s.values }, s.key)
+      const dcs = await this.handoff({ title: s.label, instruction: sub(s.instruction || ''), values: s.values ? Object.fromEntries(Object.entries(s.values).map(([k, v]) => [k, sub(v)])) : undefined }, s.key)
       if (dcs === 'skip') return { skipped: true, reason: s.label }
       if (dcs === 'retry') return { redo: true }
       return { ok: true, warn: true, manual: true, note: `${s.label}: done by operator`, statusbar: await statusbar(p) }
     }
     if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); return r.ok ? { ok: true, note: `${s.code} open`, statusbar: r.statusbar } : r }
+    if (s.op === 'fioriApp') { const r = await openFioriApp(p, this.ctx, sub(s.app || ''), sub(s.hash || '')); return r.ok ? { ok: true, note: r.note, statusbar: r.statusbar } : r }
+    if (s.op === 'click') { const hit = await clickButton(p, s.names.map((n) => (n instanceof RegExp ? n : sub(n)))); return hit ? { ok: true, note: `Clicked ${hit.t}` } : (s.optional ? { ok: true, note: `Button ${s.names[0]} not present` } : { ok: false, reason: `Button ${s.names.join(' / ')} not found` }) }
+    if (s.op === 'captureVar') {
+      const val = await captureVar(p, s.pattern)
+      if (!val) return s.optional ? { ok: true, warn: true, note: `Could not capture ${s.varName}` } : { ok: false, reason: `Could not extract ${s.varName} matching /${s.pattern}/` }
+      this.ctx.vars[s.varName] = val
+      return { ok: true, note: `Captured ${s.varName} = ${val}`, readback: val }
+    }
     if (s.op === 'dismiss') { const r = await handlePopups(p, (s.buttons || []).map((b) => new RegExp(`^${b}$`, 'i'))); return { ok: true, note: r ? `Popup handled: ${r.clicked || 'left open'}` : 'No popup' } }
     if (s.op === 'key') { await p.keyboard.press(s.key); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.key} pressed`) }
     if (s.op === 'tab') { const t = await clickTab(p, s.names); if (!t) return s.optional ? { ok: true, note: 'Tab not present, continuing' } : { ok: false, reason: `Tab ${s.names.join(' / ')} not found` }; return { ok: true, note: `Tab ${t.t}` } }
@@ -240,7 +254,7 @@ class Job {
     if (s.op === 'fill') {
       const done = []
       for (const [labels, raw] of s.fields) {
-        const v = subst(raw)
+        const v = sub(raw)
         const f = await findByLabel(p, labels)
         if (!f) return { ok: false, reason: `Field "${labels[0]}" not found on screen` }
         this.target = f.id
@@ -324,11 +338,22 @@ class Job {
 }
 
 const normalize = (v) => String(v ?? '').trim().toUpperCase().replace(/^0+(?=\d)/, '').replace(/\s+/g, ' ')
-const subst = (v) => { const y = new Date().getFullYear(); const t = new Date(); return String(v).replace('{YEAR+1}', String(y + 1)).replace('{YEAR}', String(y)).replace('{TODAY}', `${String(t.getMonth() + 1).padStart(2, '0')}/${String(t.getDate()).padStart(2, '0')}/${y}`) }
-const valuesOf = (s) => {
-  if (s.rows) return Object.fromEntries(s.rows.slice(0, 16).map((r, i) => [`Row ${i + 1}`, Object.values(r).map((v) => (v === true ? 'X' : v)).join(' · ')]))
-  if (s.fields) return Object.fromEntries(s.fields.map(([l, v]) => [l[0], subst(v)]))
-  if (s.value) return { [s.titles?.[0] || 'Value']: s.value }
+const subst = (v, vars = {}) => {
+  const y = new Date().getFullYear(), t = new Date()
+  let out = String(v)
+    .replace('{YEAR+1}', String(y + 1))
+    .replace('{YEAR}', String(y))
+    .replace('{MONTH}', String(t.getMonth() + 1).padStart(2, '0'))
+    .replace('{TODAY}', `${String(t.getMonth() + 1).padStart(2, '0')}/${String(t.getDate()).padStart(2, '0')}/${y}`)
+  for (const [k, val] of Object.entries(vars || {})) {
+    if (val != null) out = out.split(`{${k}}`).join(String(val))
+  }
+  return out
+}
+const valuesOf = (s, vars = {}) => {
+  if (s.rows) return Object.fromEntries(s.rows.slice(0, 16).map((r, i) => [`Row ${i + 1}`, Object.values(r).map((v) => (v === true ? 'X' : subst(v, vars))).join(' · ')]))
+  if (s.fields) return Object.fromEntries(s.fields.map(([l, v]) => [l[0], subst(v, vars)]))
+  if (s.value) return { [s.titles?.[0] || 'Value']: subst(s.value, vars) }
   return undefined
 }
 
