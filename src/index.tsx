@@ -12,6 +12,8 @@ app.use('*', secureHeaders({
     fontSrc: ["'self'", 'https://fonts.gstatic.com'],
     imgSrc: ["'self'", 'data:', 'blob:'],
     connectSrc: ["'self'"],
+    frameSrc: ["'self'", 'blob:'],
+    mediaSrc: ["'self'"],
     frameAncestors: ["'none'"],
     baseUri: ["'self'"],
     formAction: ["'self'"]
@@ -27,6 +29,8 @@ const shell = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f2ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15171a" media="(prefers-color-scheme: dark)">
 <meta name="robots" content="noindex">
 <title>Ultralight Project Builder, SAP PS and FI canvas</title>
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
@@ -34,6 +38,8 @@ const shell = `<!doctype html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link href="/static/style.css" rel="stylesheet">
+<link href="/static/fx.css" rel="stylesheet">
+<link rel="preload" href="/static/media/bg-poster.webp" as="image">
 </head>
 <body>
 <div id="app" aria-live="polite"></div>

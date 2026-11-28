@@ -1,0 +1,236 @@
+{
+  "at": "2026-09-27T06:04:16.849Z",
+  "user": "LEARN-626",
+  "host": "m53p.ucc.cloud",
+  "client": "236",
+  "results": [
+    {
+      "area": "pack",
+      "check": "plan builds",
+      "ok": true,
+      "detail": "100 steps"
+    },
+    {
+      "area": "pack",
+      "check": "22 relationships as predecessors",
+      "ok": true,
+      "detail": "15 successor activities"
+    },
+    {
+      "area": "pack",
+      "check": "plan survives JSON (D1 hop)",
+      "ok": true,
+      "detail": "recipe args are strings"
+    },
+    {
+      "area": "login",
+      "check": "LEARN-626 on m53p.ucc.cloud/236",
+      "ok": true,
+      "detail": "ok"
+    },
+    {
+      "area": "project",
+      "check": "open P/2626",
+      "ok": true,
+      "detail": "Project Builder: Project P/2626"
+    },
+    {
+      "area": "project",
+      "check": "all 16 activities in tree",
+      "ok": true,
+      "detail": "16 found after 10 expands; missing none"
+    },
+    {
+      "area": "project",
+      "check": "no stray activities",
+      "ok": true,
+      "detail": "extra none"
+    },
+    {
+      "area": "wbs",
+      "check": "P/2626",
+      "ok": true,
+      "detail": "Development of Ultralight Bike"
+    },
+    {
+      "area": "wbs",
+      "check": "P/2626-1",
+      "ok": true,
+      "detail": "Engineering"
+    },
+    {
+      "area": "wbs",
+      "check": "P/2626-2",
+      "ok": true,
+      "detail": "Prototype"
+    },
+    {
+      "area": "wbs",
+      "check": "P/2626-3",
+      "ok": true,
+      "detail": "Testing"
+    },
+    {
+      "area": "wbs",
+      "check": "P/2626-4",
+      "ok": true,
+      "detail": "Small series production"
+    },
+    {
+      "area": "wbs",
+      "check": "P/2626-5",
+      "ok": true,
+      "detail": "Release to mass production"
+    },
+    {
+      "area": "pstext",
+      "check": "PH-626-1",
+      "ok": true,
+      "detail": "node under top WBS"
+    },
+    {
+      "area": "milestone",
+      "check": "00004 Completion: prototype",
+      "ok": true,
+      "detail": "under 0070"
+    },
+    {
+      "area": "milestone",
+      "check": "00005 Completion: small series",
+      "ok": true,
+      "detail": "under 0120"
+    },
+    {
+      "area": "milestone",
+      "check": "00006 Completion: release",
+      "ok": true,
+      "detail": "under 0140"
+    },
+    {
+      "area": "release",
+      "check": "System status",
+      "ok": true,
+      "detail": "REL"
+    },
+    {
+      "area": "rels",
+      "check": "0020 <- 0010",
+      "ok": true,
+      "detail": "read 0010"
+    },
+    {
+      "area": "rels",
+      "check": "0030 <- 0010",
+      "ok": true,
+      "detail": "read 0010"
+    },
+    {
+      "area": "rels",
+      "check": "0040 <- 0010",
+      "ok": true,
+      "detail": "read 0010"
+    },
+    {
+      "area": "rels",
+      "check": "0045 <- 0010",
+      "ok": true,
+      "detail": "read 0010"
+    },
+    {
+      "area": "rels",
+      "check": "0050 <- 0020",
+      "ok": true,
+      "detail": "read 0020"
+    },
+    {
+      "area": "rels",
+      "check": "0060 <- 0030",
+      "ok": true,
+      "detail": "read 0030"
+    },
+    {
+      "area": "rels",
+      "check": "0070 <- 0040,0045,0050,0060",
+      "ok": true,
+      "detail": "read 0040,0045,0050,0060"
+    },
+    {
+      "area": "rels",
+      "check": "0080 <- 0070",
+      "ok": true,
+      "detail": "read 0070"
+    },
+    {
+      "area": "rels",
+      "check": "0090 <- 0070",
+      "ok": true,
+      "detail": "read 0070"
+    },
+    {
+      "area": "rels",
+      "check": "0100 <- 0070",
+      "ok": true,
+      "detail": "read 0070"
+    },
+    {
+      "area": "rels",
+      "check": "0110 <- 0070",
+      "ok": true,
+      "detail": "read 0070"
+    },
+    {
+      "area": "rels",
+      "check": "0120 <- 0080,0090,0100,0110",
+      "ok": true,
+      "detail": "read 0080,0090,0100,0110"
+    },
+    {
+      "area": "rels",
+      "check": "0130 <- 0120",
+      "ok": true,
+      "detail": "read 0120"
+    },
+    {
+      "area": "rels",
+      "check": "0135 <- 0120",
+      "ok": true,
+      "detail": "read 0120"
+    },
+    {
+      "area": "rels",
+      "check": "0140 <- 0130,0135",
+      "ok": true,
+      "detail": "read 0130,0135"
+    },
+    {
+      "area": "task10",
+      "check": "0135 costs 8,000 + flexible",
+      "ok": true,
+      "detail": "8,000.00 flexible=true"
+    },
+    {
+      "area": "costs",
+      "check": "report runs",
+      "ok": true,
+      "detail": "Report totals Actual/Commitment/Total/Plan: 11,450.00 / 5,000.00 / 16,450.00 / 49,433.14"
+    },
+    {
+      "area": "costs",
+      "check": "actual labor 1,750.00 (Task 11/12)",
+      "ok": true,
+      "detail": "8000000 Labor"
+    },
+    {
+      "area": "costs",
+      "check": "plan 0135 = 8,000.00 (Task 10)",
+      "ok": true,
+      "detail": "6300000 Other operating expenses"
+    },
+    {
+      "area": "costs",
+      "check": "invoice 9,700.00 (Task 13)",
+      "ok": true,
+      "detail": "posted"
+    }
+  ]
+}

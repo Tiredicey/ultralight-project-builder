@@ -1,3 +1,8 @@
+import { buildSubmission, pickFigures, taskStatus, FIGURES, fileName, EXPORT_PARTS, resolveParts } from './submission.js'
+import { conclusion, conclusionIndex, CONCLUSION_COUNT } from './conclusions.js'
+import { hero, mountBackdrop, reveal, typeLine, countUp, transition, media } from './fx.js'
+import { enhance, openShortcuts } from './extras.js'
+import { taskProgress, ribbon, runBar, duration, gantt } from './viz.js'
 const $ = (s, r = document) => r.querySelector(s)
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '')
@@ -10,8 +15,39 @@ async function http(path, opts = {}) {
   const res = await fetch(`/api${path}`, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined })
   if (res.status === 204) return null
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) { const e = new Error(data.error || `HTTP ${res.status}`); e.status = res.status; e.data = data; throw e }
+  if (!res.ok) { if (/^D1_(WRITE|READ)_LIMIT$/.test(data.code || '')) quotaBanner(data); const e = new Error(data.error || `HTTP ${res.status}`); e.status = res.status; e.data = data; throw e }
+  if (data && data.quota && data.quota.retryAt) quotaBanner({ code: data.quota.kind === 'read' ? 'D1_READ_LIMIT' : 'D1_WRITE_LIMIT', retryAt: data.quota.retryAt })
   return data
+}
+
+let quotaTimer = 0
+function quotaBanner(q) {
+  const until = Number(q.retryAt) || 0
+  if (until <= Date.now()) return
+  let el = document.getElementById('quota-banner')
+  if (!el) {
+    el = document.createElement('aside')
+    el.id = 'quota-banner'
+    el.className = 'quota-banner'
+    el.setAttribute('role', 'status')
+    el.innerHTML = '<div class="quota-text"><b></b><span></span></div><div class="quota-actions"><button class="btn sm" type="button" data-q="retry">Try again</button><button class="btn sm ghost" type="button" data-q="hide">Hide</button></div>'
+    el.querySelector('[data-q="hide"]').onclick = () => { el.hidden = true; try { sessionStorage.setItem('uc_quota_hidden', el.dataset.until) } catch {} }
+    el.querySelector('[data-q="retry"]').onclick = () => location.reload()
+    document.body.prepend(el)
+  }
+  el.dataset.until = String(Math.max(Number(el.dataset.until) || 0, until))
+  try { if (sessionStorage.getItem('uc_quota_hidden') === el.dataset.until) el.hidden = true } catch {}
+  el.querySelector('b').textContent = q.code === 'D1_READ_LIMIT' ? 'Database read allowance used up for today' : 'Saving is paused until 00:00 UTC'
+  const tick = () => {
+    const left = Number(el.dataset.until) - Date.now()
+    if (left <= 0) { clearInterval(quotaTimer); el.remove(); return }
+    const h = Math.floor(left / 36e5), m = Math.max(1, Math.ceil((left % 36e5) / 6e4))
+    el.querySelector('span').dataset.short = `Viewing works. Saving resumes in ${h ? `${h} h ` : ''}${m} min.`
+    el.querySelector('span').textContent = `Cloudflare's free daily database allowance is reached. You can still sign in and view runs, evidence, the task sheet and project data. New runs, approvals and settings save again in ${h ? `${h} h ` : ''}${m} min (${new Date(Number(el.dataset.until)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} your time). The runner keeps working in SAP and reports less often until then.`
+  }
+  tick()
+  clearInterval(quotaTimer)
+  quotaTimer = setInterval(tick, 30000)
 }
 
 function toast(msg, err = false) {
@@ -35,10 +71,16 @@ function toggleTheme() {
   const next = cur === 'dark' ? 'light' : 'dark'
   document.documentElement.dataset.theme = next
   localStorage.setItem('uc_theme', next)
+  paintThemeBtns()
 }
+const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+function paintThemeBtns() { document.querySelectorAll('[data-theme-btn]').forEach((b) => { const dark = curTheme() === 'dark'; b.textContent = dark ? 'Light theme' : 'Dark theme'; b.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme') }) }
+const stateHtml = (msg) => `<div class="view-state" role="status"><div class="stack"><span class="spinner" aria-hidden="true"></span><p class="muted">${esc(msg)}</p></div></div>`
+const errorHtml = (msg) => `<div class="view-state" role="alert"><div class="stack"><h2>This page did not load</h2><p class="muted">${esc(msg)}</p><button class="btn primary" id="viewRetry">Try again</button></div></div>`
 
 async function boot() {
   S.health = await http('/health').catch(() => ({ initialized: true }))
+  if (S.health?.quota?.retryAt) quotaBanner({ code: S.health.quota.kind === 'read' ? 'D1_READ_LIMIT' : 'D1_WRITE_LIMIT', retryAt: S.health.quota.retryAt })
   S.user = (await http('/auth/me')).user
   const hash = location.hash.slice(1)
   if (hash) { S.view = hash.split('/')[0]; if (S.view === 'canvas' && hash.split('/')[1]) S.pendingJob = Number(hash.split('/')[1]) }
@@ -48,60 +90,103 @@ async function boot() {
 
 function render() {
   stopTimers()
+  mountBackdrop()
   if (!S.user) return renderAuth()
+  document.body.classList.remove('dmz')
   if (S.user.status !== 'approved') return renderPending()
   renderShell()
 }
 
+let settleObs
+const XCTX = {
+  user: () => S.user, view: () => S.view, go: (v) => go(v), http, toast, toggleTheme, rerender: () => transition(render),
+  job: () => S.job, frame: () => S.frame, steps: () => S.plan?.steps?.length || 0, planRels: () => S.planData?.relationships || [],
+  nav: () => [...NAV, ...(S.user && S.user.role !== 'user' ? [['admin', 'Owner console']] : [])],
+  commands: () => [
+    ...XCTX.nav().map(([v, l]) => ({ label: l, hint: 'page', run: () => go(v) })),
+    ...(S.pack?.tasks || []).map((t) => ({ label: `Task ${t.id}. ${t.title}`, hint: `task sheet · ${t.txn}`, run: () => go('sheet', t.id) })),
+    ...S.accounts.map((a) => ({ label: `Validate ${a.sap_user} in SAP`, hint: 'read-only run, changes nothing', run: run(async () => { const r = await http('/jobs', { method: 'POST', body: { sapUser: a.sap_user, tasks: [], mode: 'validate' } }).catch((e) => { if (e.data?.jobId) { go('canvas', e.data.jobId); return null } throw e }); if (r) { toast(`Validate run #${r.id} queued`); go('canvas', r.id) } }) })),
+    ...(S.jobs || []).slice(0, 8).map((j) => ({ label: `Run #${j.id} ${j.sap_user}`, hint: `${j.mode} · ${j.status}`, run: () => go('canvas', j.id) })),
+    { label: 'Switch theme', hint: 't', run: toggleTheme },
+    { label: 'Keyboard shortcuts', hint: '?', run: openShortcuts },
+    { label: 'Sign out', hint: 'session', run: logout }
+  ]
+}
+const settle = () => { const v = $('#view'); if (!v) return; settleObs?.disconnect(); let q = 0; settleObs = new MutationObserver(() => { if (q) return; q = requestAnimationFrame(() => { q = 0; reveal(v); countUp(v); enhance(XCTX) }) }); settleObs.observe(v, { childList: true, subtree: true }); reveal(v); enhance(XCTX) }
+
 function renderAuth(mode = S.health && !S.health.initialized ? 'register' : 'login') {
   const first = S.health && !S.health.initialized
+  document.body.classList.add('dmz')
+  const shots = [['sap-network.webp', 'Task 5 network graph, P/2653'], ['sap-costs.webp', 'Task 14 cost report, 11,450.00 actual'], ['shot-canvas.webp', 'Live canvas streaming SAP'], ['sap-wbs.webp', 'Task 1 WBS responsibilities'], ['shot-plan.webp', 'Project data network plan'], ['sap-invoice.webp', 'Task 13 supplier invoice 9,700 EUR'], ['sap-structure.webp', 'Task 9 structure overview']]
   $('#app').innerHTML = `
-  <main class="auth">
+  <main class="auth dmz-auth">
+    <div class="dmz-video" aria-hidden="true">
+      <video autoplay muted loop playsinline preload="metadata" poster="${media}bg-poster.webp"><source src="${media}bg-loop.mp4" type="video/mp4"></video>
+      <i class="dmz-tint"></i><i class="dmz-grid"></i>
+    </div>
     <section class="auth-story">
       <div class="brand"><img src="/static/icon.svg" alt="">Ultralight Project Builder</div>
-      <div>
-        <h1>Drive SAP PS and FI from a live canvas, with the owner holding the keys.</h1>
-        <p class="lead">A browser subagent runs the IT2406 Performance Task 1 pack on SAP WebGUI, streams every frame with a DOM map, and hands control back to you whenever SAP needs a human.</p>
+      <div class="dmz-copy">
+        <span class="kicker">SAP PS and FI, 14 tasks, one canvas</span>
+        <h1 class="dmz-title">Build the <span class="grad">Ultralight Bike</span> project<span class="typed-line"><span class="typed" id="typed"></span></span></h1>
+        <p class="lead">A runner drives SAP WebGUI for you, streams every frame here, reads each result back from SAP, and hands control to you whenever SAP needs a person.</p>
+        <div class="auth-facts">
+          <div><b data-count="14">14</b>tasks end to end</div>
+          <div><b data-count="84">84</b>Autopilot steps</div>
+          <div><b data-count="11450" data-dec="2">11,450.00</b>EUR actual, read back</div>
+        </div>
       </div>
-      <div class="auth-facts small muted">
-        <div><b>M53 / 236</b>SAP system and client</div>
-        <div><b>14 tasks</b>Project P/2### end to end</div>
-        <div><b>Owner gate</b>No access until approved</div>
+      <div class="marquee" aria-label="Real screenshots from the site and SAP">
+        <div class="marquee-track">${[...shots, ...shots].map(([f, c], i) => `<figure ${i >= shots.length ? 'aria-hidden="true"' : ''}><img src="${media}${f}" alt="${i >= shots.length ? '' : esc(c)}" loading="lazy" decoding="async"><figcaption>${esc(c)}</figcaption></figure>`).join('')}</div>
       </div>
     </section>
     <section class="auth-form">
-      <form id="authForm" novalidate>
+      <form id="authForm" class="glass" novalidate>
         <div class="seg" role="group" aria-label="Choose form">
           <button type="button" data-m="login" aria-pressed="${mode === 'login'}">Sign in</button>
           <button type="button" data-m="register" aria-pressed="${mode === 'register'}">Request access</button>
         </div>
-        <h2>${mode === 'login' ? 'Sign in' : first ? 'Create the owner account' : 'Request access'}</h2>
-        ${first && mode === 'register' ? '<p class="small muted">No accounts exist yet. The first account becomes the owner who approves everyone else.</p>' : ''}
+        <h2>${mode === 'login' ? 'Sign in to the canvas' : first ? 'Create the owner account' : 'Request access'}</h2>
+        <p class="small muted">${mode === 'login' ? 'Sign in with the email the owner approved.' : first ? 'No accounts exist yet. The first account becomes the owner who approves everyone else.' : 'The owner approves each request and grants a SAP account.'}</p>
         ${mode === 'register' ? '<div class="field"><label for="name">Name</label><input class="input" id="name" name="name" autocomplete="name" required></div>' : ''}
         <div class="field"><label for="email">Email</label><input class="input" id="email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="10" required></div>
+        <div class="field"><label for="password">Password</label><div class="pw"><input class="input" id="password" name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="10" required><button type="button" class="btn sm ghost" id="pwEye" aria-label="Show password" aria-pressed="false">Show</button></div></div>
         ${mode === 'register' && first && S.health.setupKeyRequired ? '<div class="field"><label for="setupKey">Setup key</label><input class="input" id="setupKey" name="setupKey" type="password" required></div>' : ''}
         ${mode === 'register' && !first ? '<div class="field"><label for="note">Why you need access (optional)</label><input class="input" id="note" name="note" placeholder="Section, SAP user LEARN-###"></div>' : ''}
-        <button class="btn primary" type="submit">${mode === 'login' ? 'Sign in' : first ? 'Create owner' : 'Send request'}</button>
+        <button class="btn primary big" type="submit"><span>${mode === 'login' ? 'Sign in' : first ? 'Create owner' : 'Send request'}</span></button>
+        <p class="small muted dmz-foot">SAP M53 · client 236 · the owner approves every account</p>
       </form>
     </section>
   </main>`
   document.querySelectorAll('[data-m]').forEach((b) => b.addEventListener('click', () => renderAuth(b.dataset.m)))
+  $('#pwEye').onclick = (e) => { const i = $('#password'); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; e.target.textContent = show ? 'Hide' : 'Show'; e.target.setAttribute('aria-pressed', String(show)) }
+  typeLine($('#typed'), ['on autopilot.', 'with you in the loop.', 'for any LEARN-###.', 'verified in SAP.'])
+  countUp($('.auth-facts'))
+  enhance(XCTX)
+  const vid = $('.dmz-video video')
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { vid.removeAttribute('autoplay'); vid.pause() }
   $('#authForm').addEventListener('submit', run(async (e) => {
     e.preventDefault()
-    const body = Object.fromEntries(new FormData(e.target))
-    const r = await http(`/auth/${mode}`, { method: 'POST', body })
-    S.user = r.user
-    S.health = { ...S.health, initialized: true }
-    render()
+    const btn = e.target.querySelector('[type=submit]')
+    btn.disabled = true; btn.classList.add('busy')
+    try {
+      const body = Object.fromEntries(new FormData(e.target))
+      const r = await http(`/auth/${mode}`, { method: 'POST', body })
+      S.user = r.user
+      if (r.session === 'fallback') { quotaBanner({ code: 'D1_WRITE_LIMIT', retryAt: r.retryAt }); setTimeout(() => toast(r.notice), 600) }
+      S.health = { ...S.health, initialized: true }
+      document.body.classList.remove('dmz')
+      transition(render)
+    } finally { if (btn.isConnected) { btn.disabled = false; btn.classList.remove('busy') } }
   }))
 }
 
 function renderPending() {
   $('#app').innerHTML = `
-  <main class="center"><div class="stack" style="max-width:460px">
+  <main class="center pending-scene"><div class="stack glass" style="max-width:500px">
     <div class="brand" style="justify-content:center"><img src="/static/icon.svg" alt="">Ultralight Project Builder</div>
-    <h1>Waiting for the owner</h1>
+    <div class="hourglass" aria-hidden="true"><i></i><i></i><i></i></div>
+    <h1>Waiting for the <span class="grad">owner</span></h1>
     <p class="muted">Your request as <b>${esc(S.user.email)}</b> is <span class="pill ${S.user.status === 'pending' ? 'warn' : 'err'}">${esc(S.user.status)}</span>. The owner must approve you and grant a SAP account before the canvas unlocks. This page checks every 15 seconds.</p>
     <div class="row" style="justify-content:center"><button class="btn" id="recheck">Check now</button><button class="btn ghost" id="out">Sign out</button></div>
   </div></main>`
@@ -113,7 +198,7 @@ function renderPending() {
 
 const logout = run(async () => { await http('/auth/logout', { method: 'POST' }); S.user = null; render() })
 
-const NAV = [['launch', 'Run pack'], ['canvas', 'Live canvas'], ['jobs', 'Runs and evidence'], ['plan', 'Project data'], ['guide', 'Setup guide']]
+const NAV = [['launch', 'Run pack'], ['canvas', 'Live canvas'], ['sheet', 'Task sheet'], ['ready', 'Readiness'], ['jobs', 'Runs and evidence'], ['plan', 'Project data'], ['export', 'Export submission'], ['guide', 'Setup guide']]
 
 function navHtml() {
   const items = [...NAV, ...(S.user.role === 'owner' || S.user.role === 'admin' ? [['admin', 'Owner console']] : [])]
@@ -127,19 +212,32 @@ function renderShell() {
       <div class="brand"><img src="/static/icon.svg" alt="">Ultralight Builder</div>
       ${navHtml()}
       <div class="side-foot">
-        <div class="muted">${esc(S.user.name)} <span class="pill">${esc(S.user.role)}</span></div>
-        <div class="row"><button class="btn sm" id="theme">Theme</button><button class="btn sm ghost" id="logout">Sign out</button></div>
+        <div class="side-user muted"><span title="${esc(S.user.email)}">${esc(S.user.name)}</span><span class="pill">${esc(S.user.role)}</span></div>
+        <div class="row"><button class="btn sm" data-theme-btn></button><button class="btn sm ghost" id="logout">Sign out</button></div>
       </div>
     </aside>
-    <header class="topbar"><div class="brand"><img src="/static/icon.svg" alt=""></div>${navHtml()}<button class="btn sm ghost" id="logout2">Sign out</button></header>
+    <header class="topbar"><div class="brand"><img src="/static/icon.svg" alt=""></div>${navHtml()}<div class="topbar-actions"><button class="btn sm ghost" data-theme-btn></button><button class="btn sm ghost" id="logout2">Sign out</button></div></header>
     <main class="main" id="view"></main>
   </div>`
   document.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => go(b.dataset.v)))
-  $('#theme').onclick = toggleTheme
+  document.querySelectorAll('[data-theme-btn]').forEach((b) => { b.onclick = toggleTheme })
+  paintThemeBtns()
+  const cur = $('.topbar [aria-current="page"]'); if (cur) { const nav = cur.parentElement; nav.scrollLeft = Math.max(0, nav.scrollLeft + cur.getBoundingClientRect().left - nav.getBoundingClientRect().left - 8) }
   $('#logout').onclick = logout
   $('#logout2').onclick = logout
-  const views = { launch: viewLaunch, canvas: viewCanvas, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin }
-  ;(views[S.view] || viewLaunch)()
+  const views = { launch: viewLaunch, canvas: viewCanvas, sheet: viewSheet, ready: viewReady, jobs: viewJobs, plan: viewPlan, guide: viewGuide, admin: viewAdmin, export: viewExport }
+  if (!views[S.view] || (S.view === 'admin' && S.user.role === 'user')) S.view = 'launch'
+  scrollTo({ top: 0 })
+  const v = $('#view')
+  v.innerHTML = stateHtml('Loading')
+  const view = S.view
+  Promise.resolve().then(views[view]).catch((e) => {
+    if (S.view !== view || !v.isConnected) return
+    if (e.status === 401) { S.user = null; return render() }
+    v.innerHTML = errorHtml(e.message)
+    $('#viewRetry').onclick = () => transition(render)
+  })
+  settle()
 }
 
 function go(view, arg) {
@@ -147,15 +245,15 @@ function go(view, arg) {
   if (view === 'canvas' && arg) S.pendingJob = Number(arg)
   const h = arg ? `${view}/${arg}` : view
   if (location.hash.slice(1) !== h) history.replaceState(null, '', `#${h}`)
-  render()
+  transition(render)
 }
 
 async function viewLaunch() {
   const v = $('#view')
-  v.innerHTML = '<p class="muted">Loading pack</p>'
+  v.innerHTML = stateHtml('Loading the task pack')
   let pack, acc
   try {
-    ;[pack, acc] = await Promise.all([http(`/pack?packId=${encodeURIComponent(S.packId)}`), http('/me/accounts')])
+    ;[pack, acc] = await Promise.all([http(`/pack?packId=${encodeURIComponent(S.packId || '')}`), http('/me/accounts')])
   } catch {
     v.innerHTML = '<div class="card"><h3>Unable to load lab packs. Refresh the page.</h3></div>'
     return
@@ -168,8 +266,7 @@ async function viewLaunch() {
   if (!S.selTasks.size) pack.tasks.forEach((t) => S.selTasks.add(t.id))
   const a = S.accounts.find((x) => x.sap_user === S.selAccount)
   v.innerHTML = `
-  <div class="head"><div><h1>Launch Lab Run</h1><p>${esc(activePack.description || `Pick an allowlisted SAP account in client ${pack.client}, choose tasks, then watch and steer on the live canvas.`)}</p></div>
-  <span class="pill ${S.runnersOnline ? 'ok' : 'err'}">${S.runnersOnline ? `${S.runnersOnline} runner online` : 'No runner online'}</span></div>
+  ${hero('launch', { title: `Run <span class="grad">${esc(activePack.code || 'SAP')}</span> pack`, text: esc(activePack.description || `Pick an allowlisted SAP account in client ${pack.client}, choose tasks, then watch and steer on the live canvas. One run per SAP user at a time, because WebGUI allows one dialog session.`), meta: `<span class="pill ${S.runnersOnline ? 'ok' : 'err'}"><i class="live-dot"></i>${S.runnersOnline ? `${S.runnersOnline} runner online` : 'No runner online'}</span><span class="pill">${pack.tasks.length} tasks</span><span class="pill">${S.accounts.length} account${S.accounts.length === 1 ? '' : 's'}</span>` })}
   ${S.accounts.length ? '' : `<div class="card" style="margin-bottom:1rem"><h3>No SAP account granted yet</h3><p class="muted small">${S.user.role === 'owner' ? 'Add LEARN-### accounts in the Owner console, then grant them.' : 'Ask the owner to grant you a LEARN-### account.'}</p></div>`}
   <form class="launch" id="launch">
     <section class="card stack">
@@ -188,7 +285,7 @@ async function viewLaunch() {
       <section class="card stack">
         <h2>Mode</h2>
         <div class="modes">
-          ${[['assist', 'Assist', 'Automation runs, pauses on manual steps and failures, you finish on the canvas.'], ['auto', 'Autopilot', 'Only stops on errors. Manual steps still wait for you.'], ['observe', 'Observe', 'Login and read-back only. Canvas input is blocked.']].map(([k, l, d]) => `<label class="mode"><input type="radio" name="mode" value="${k}" ${S.mode === k ? 'checked' : ''}><b>${l}</b><span class="small muted">${d}</span></label>`).join('')}
+          ${[['assist', 'Assist', 'Automation runs, pauses on manual steps and failures, you finish on the canvas.'], ['auto', 'Autopilot', 'Only stops on errors. Manual steps still wait for you.'], ['observe', 'Observe', 'Login and read-back only. Canvas input is blocked.'], ['validate', 'Validate', 'Read-only. Checks in SAP whether each selected task is already done and reports pass or fail per task.']].map(([k, l, d]) => `<label class="mode"><input type="radio" name="mode" value="${k}" ${S.mode === k ? 'checked' : ''}><b>${l}</b><span class="small muted">${d}</span></label>`).join('')}
         </div>
         <button class="btn primary" type="submit" ${S.accounts.length ? '' : 'disabled'}>Start run</button>
       </section>
@@ -207,7 +304,7 @@ async function viewLaunch() {
     sync()
     if (!S.selTasks.size) throw new Error('Pick at least one task')
     const r = await http('/jobs', { method: 'POST', body: { packId: S.packId, sapUser: S.selAccount, tasks: [...S.selTasks].sort((a, b) => a - b), mode: S.mode, password: $('#pw').value || undefined } }).catch((err) => { if (err.data?.jobId) { go('canvas', err.data.jobId); return null } throw err })
-    if (r) { toast(`Run #${r.id} queued`); go('canvas', r.id) }
+    if (r) { toast(r.warning || `Run #${r.id} queued`, !!r.warning); go('canvas', r.id) }
   }))
 }
 
@@ -225,20 +322,21 @@ async function viewCanvas() {
   if (!S.pendingJob && !S.job) {
     const r = await http('/jobs')
     const live = r.jobs.find((x) => ['running', 'paused', 'waiting', 'claimed', 'queued'].includes(x.status)) || r.jobs[0]
-    if (!live) { v.innerHTML = '<div class="center"><div class="stack"><h1>No runs yet</h1><p class="muted">Start a run to open the live canvas.</p><div><button class="btn primary" id="toLaunch">Run pack</button></div></div></div>'; $('#toLaunch').onclick = () => go('launch'); return }
+    if (!live) { v.innerHTML = hero('canvas', { title: 'No runs <span class="grad">yet</span>', text: 'Start a run from Run pack. The live SAP screen streams here while it works.' }) + '<div class="center"><div class="stack"><div><button class="btn primary" id="toLaunch">Run pack</button></div></div></div>'; $('#toLaunch').onclick = () => go('launch'); return }
     S.pendingJob = live.id
   }
   const id = S.pendingJob || S.job.id
   S.pendingJob = null
+  if (!S.pack) S.pack = await http('/pack').catch(() => null)
   S.lastEvent = S.job && S.job.id === id ? S.lastEvent : 0
   await loadJob(id)
   if (location.hash.slice(1) !== `canvas/${id}`) history.replaceState(null, '', `#canvas/${id}`)
   v.innerHTML = `
-  <div class="head"><div><h1>Run #${id} · ${esc(S.job.sap_user)}</h1><p id="jobline"></p></div><div class="row" id="jobactions"></div></div>
+  ${hero('canvas', { title: `Run <span class="grad">#${id}</span> · ${esc(S.job.sap_user)}`, text: '<span id="jobline"></span>', actions: '<div class="row" id="jobactions"></div>' })}
   <div class="canvas-wrap">
     <section>
       <div class="viewport" id="vp" tabindex="0" aria-label="Live SAP canvas. Click to interact, type while focused.">
-        <div class="empty" id="vpEmpty">Waiting for the runner to stream the first frame.</div>
+        <div class="empty" id="vpEmpty">${['done', 'failed', 'aborted'].includes(S.job.status) ? 'Loading the last frame of this run.' : 'Waiting for the runner to stream the first frame.'}</div>
         <img id="vpImg" alt="Live SAP WebGUI frame" hidden>
         <div class="overlay" id="ov"></div>
         <div class="hud"><span id="hudL"></span><span id="hudR"></span></div>
@@ -251,6 +349,7 @@ async function viewCanvas() {
         <button class="btn sm" data-c="skip">Skip step</button>
         <button class="btn sm" data-c="capture">Capture evidence</button>
         <button class="btn sm" id="ovBtn" aria-pressed="${S.overlay}">DOM map</button>
+        <button class="btn sm" id="sheetBtn" aria-expanded="false" aria-controls="drawer">Task sheet</button>
         <button class="btn sm danger" data-c="abort">Abort</button>
       </div>
       <form class="typebar" id="typebar">
@@ -258,20 +357,25 @@ async function viewCanvas() {
         <button class="btn sm" type="submit">Send</button>
         <select class="input" id="keySel" style="max-width:9rem" aria-label="Special key"><option value="">Key</option>${['Enter', 'Tab', 'Shift+Tab', 'Escape', 'F4', 'F8', 'Control+S', 'F3', 'Backspace', 'ArrowDown', 'ArrowUp', 'PageDown', 'PageUp'].map((k) => `<option>${k}</option>`).join('')}</select>
       </form>
-      <p class="small muted" style="margin-top:.5rem">Click the canvas to focus it, then type directly. Hover shows the SAP field title from the DOM capture. Double-click to open rows.</p>
+      <p class="small muted" style="margin-top:.5rem" id="vpHint">${HINT}</p>
     </section>
     <aside class="panel">
       <div id="prompt"></div>
-      <div class="card stack"><div class="row" style="justify-content:space-between"><h3>Steps</h3><span class="small muted" id="stepCount"></span></div><div class="progress"><i id="bar"></i></div><div class="steps" id="steps"></div></div>
+      <div class="card stack"><div class="row" style="justify-content:space-between"><h3>Steps</h3><span class="small muted" id="stepCount"></span></div><div class="progress"><i id="bar"></i></div><div id="ribbon"></div><div class="steps" id="steps"></div></div>
       <div class="card stack"><h3>Activity log</h3><div class="log" id="log"></div></div>
     </aside>
   </div>`
+  v.insertAdjacentHTML('beforeend', '<aside class="drawer" id="drawer" hidden aria-label="Task sheet for the current task"></aside>')
   wireCanvas()
+  $('#sheetBtn').onclick = run(async () => { const d = $('#drawer'); const open = d.hidden; d.hidden = !open; $('#sheetBtn').setAttribute('aria-expanded', String(open)); if (open) await paintDrawer() })
   paintJob()
   pollFrame()
   S.timers.push(setInterval(run(async () => { if (!S.job) return; const was = S.job.status; await loadJob(S.job.id); paintJob(); if (was !== S.job.status && ['done', 'failed', 'aborted'].includes(S.job.status)) toast(`Run ${S.job.status}`) }), 1500))
   S.timers.push(setInterval(pollFrame, 700))
 }
+
+const HINT = 'Click the canvas to control SAP: type, scroll the SAP screen, double-click rows. Until you click it, the mouse wheel scrolls this page.'
+const jobLive = () => !!S.job && !['done', 'failed', 'aborted'].includes(S.job.status)
 
 const send = run(async (cmd) => { if (!S.job) return; await http(`/jobs/${S.job.id}/commands`, { method: 'POST', body: cmd }) })
 
@@ -288,7 +392,16 @@ function wireCanvas() {
   }
   vp.addEventListener('click', (e) => { vp.focus(); const p = toPage(e); if (p && S.job?.mode !== 'observe') send({ type: 'click', ...p }) })
   vp.addEventListener('dblclick', (e) => { const p = toPage(e); if (p && S.job?.mode !== 'observe') send({ type: 'dblclick', ...p }) })
-  vp.addEventListener('wheel', (e) => { if (!S.frame || S.job?.mode === 'observe') return; e.preventDefault(); const p = toPage(e) || { x: S.frame.width / 2, y: S.frame.height / 2 }; send({ type: 'scroll', ...p, dy: Math.sign(e.deltaY) * 300 }) }, { passive: false })
+  vp.addEventListener('wheel', (e) => {
+    if (!S.frame || ['observe', 'validate'].includes(S.job?.mode) || document.activeElement !== vp || !jobLive()) return
+    e.preventDefault()
+    const now = Date.now()
+    if (now - (S.wheelAt || 0) < 180) return
+    S.wheelAt = now
+    const p = toPage(e) || { x: S.frame.width / 2, y: S.frame.height / 2 }
+    send({ type: 'scroll', ...p, dy: Math.sign(e.deltaY) * 300 })
+  }, { passive: false })
+  document.addEventListener('pointerdown', (e) => { if (vp.isConnected && document.activeElement === vp && !vp.contains(e.target)) vp.blur() })
   vp.addEventListener('mousemove', (e) => {
     const p = toPage(e)
     const boxes = S.frame?.dom?.els || []
@@ -299,8 +412,8 @@ function wireCanvas() {
     document.querySelectorAll('.box.hot').forEach((b) => b.classList.remove('hot'))
     if (hit) { $(`.box[data-i="${hit.i}"]`)?.classList.add('hot'); $('#hudR').textContent = `${hit.t || hit.k}${hit.v ? ` = ${hit.v}` : ''}` } else $('#hudR').textContent = S.frame?.statusbar || ''
   })
-  vp.addEventListener('focus', () => vp.classList.add('focus'))
-  vp.addEventListener('blur', () => { vp.classList.remove('focus'); flushType() })
+  vp.addEventListener('focus', () => { vp.classList.add('focus'); $('#vpHint').textContent = 'Canvas has the keyboard and mouse wheel. Click outside it to scroll this page again.' })
+  vp.addEventListener('blur', () => { vp.classList.remove('focus'); flushType(); $('#vpHint').textContent = HINT })
   vp.addEventListener('keydown', (e) => {
     if (S.job?.mode === 'observe') return
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); S.typeBuf += e.key; clearTimeout(S.typeT); S.typeT = setTimeout(flushType, 250); return }
@@ -320,10 +433,14 @@ function wireCanvas() {
 
 function flushType() { if (S.typeBuf) { send({ type: 'type', text: S.typeBuf }); S.typeBuf = '' } }
 
+let framePending = false
 const pollFrame = run(async () => {
-  if (!S.job || !$('#vp')) return
-  const f = await http(`/jobs/${S.job.id}/frame?since=${S.frameSeq}`)
-  if (!f) return
+  if (!S.job || !$('#vp') || framePending) return
+  const id = S.job.id
+  framePending = true
+  let f
+  try { f = await http(`/jobs/${id}/frame?since=${S.frameSeq}`) } finally { framePending = false }
+  if (!f || !S.job || S.job.id !== id || !$('#vp')) return
   S.frame = f; S.frameSeq = f.seq
   const img = $('#vpImg')
   img.src = `data:image/jpeg;base64,${f.image}`
@@ -351,33 +468,72 @@ function paintJob() {
   const j = S.job
   if (!j || !$('#jobline')) return
   const cls = { done: 'ok', failed: 'err', aborted: 'err', running: 'accent', paused: 'warn', waiting: 'warn', queued: '', claimed: 'accent' }[j.status] || ''
-  $('#jobline').innerHTML = `<span class="pill ${cls}">${esc(j.status)}</span> ${esc(j.mode)} mode · tasks ${j.tasks.join(', ')} · started ${esc(fmtTime(j.started_at || j.created_at))}`
-  $('#jobactions').innerHTML = `<button class="btn sm" id="toEv">Evidence (${S.evidence.length})</button>${['done', 'failed', 'aborted'].includes(j.status) ? '<button class="btn sm primary" id="again">Run again</button>' : ''}`
-  $('#toEv').onclick = () => go('jobs', j.id)
-  if ($('#again')) $('#again').onclick = () => { S.selAccount = j.sap_user; S.selTasks = new Set(j.tasks); S.mode = j.mode; go('launch') }
+  const headSig = `${j.status}|${S.evidence.length}`
+  if ($('#jobline').dataset.sig !== headSig) {
+    $('#jobline').dataset.sig = headSig
+    $('#jobline').innerHTML = `<span class="pill ${cls}">${esc(j.status)}</span> ${esc(j.mode)} mode · tasks ${j.tasks.join(', ')} · started ${esc(fmtTime(j.started_at || j.created_at))}`
+    $('#jobactions').innerHTML = `<button class="btn sm" id="toEv">Evidence (${S.evidence.length})</button>${['done', 'failed', 'aborted'].includes(j.status) ? '<button class="btn sm primary" id="again">Run again</button>' : ''}`
+    $('#toEv').onclick = () => go('jobs', j.id)
+    if ($('#again')) $('#again').onclick = () => { S.selAccount = j.sap_user; S.selTasks = new Set(j.tasks); S.mode = j.mode; go('launch') }
+  }
   const steps = S.plan?.steps || []
   const status = {}
   for (const e of S.events) if (e.step_key) status[e.step_key] = e.level
   $('#stepCount').textContent = `${Math.min(j.step_idx, steps.length)} of ${steps.length}`
   $('#bar').style.width = `${steps.length ? (Math.min(j.step_idx, steps.length) / steps.length) * 100 : 0}%`
   const stepsEl = $('#steps')
-  stepsEl.innerHTML = steps.map((s, i) => { const st = status[s.key]; const c = i === j.step_idx && !['done', 'failed', 'aborted'].includes(j.status) ? 'cur' : st === 'ok' ? 'ok' : st === 'error' ? 'err' : st === 'warn' ? 'warn' : ''; return `<div class="step ${c}" data-i="${i}"><span class="k">${s.key}</span><span>${esc(s.label || s.op)}</span><span class="s small">${st === 'ok' ? 'done' : st === 'error' ? 'failed' : st === 'warn' ? 'check' : s.op === 'manual' ? 'you' : ''}</span></div>` }).join('')
-  stepsEl.querySelector('.cur')?.scrollIntoView({ block: 'nearest' })
+  const live = jobLive()
+  const stepSig = `${j.step_idx}|${j.status}|${S.events.length}|${steps.length}`
+  if (stepsEl.dataset.sig !== stepSig) {
+    stepsEl.dataset.sig = stepSig
+    const rb = $('#ribbon')
+    if (rb) {
+      const titles = Object.fromEntries((S.pack?.tasks || []).map((t) => [t.id, t.title]))
+      const had = rb.contains(document.activeElement) ? document.activeElement.dataset.rb : null
+      rb.innerHTML = ribbon(taskProgress(steps, status, j.step_idx, live, S.events), titles)
+      if (had) rb.querySelector(`[data-rb="${had}"]`)?.focus()
+      rb.onclick = (e) => { const b = e.target.closest('[data-rb]'); if (!b) return; const row = [...stepsEl.children].find((x) => x.querySelector('.k')?.textContent === b.dataset.rb); if (!row) return; S.stepsTouched = Date.now(); stepsEl.scrollTop = row.offsetTop - stepsEl.offsetTop; row.classList.remove('x-flash'); void row.offsetWidth; row.classList.add('x-flash') }
+    }
+    const keep = stepsEl.scrollTop
+    stepsEl.innerHTML = steps.map((s, i) => { const st = status[s.key]; const c = i === j.step_idx && live ? 'cur' : st === 'ok' ? 'ok' : st === 'error' ? 'err' : st === 'warn' ? 'warn' : ''; return `<div class="step ${c}" data-i="${i}"><span class="k">${s.key}</span><span>${esc(s.label || s.op)}</span><span class="s small">${st === 'ok' ? 'done' : st === 'error' ? 'failed' : st === 'warn' ? 'check' : s.op === 'manual' ? 'you' : ''}</span></div>` }).join('')
+    stepsEl.scrollTop = keep
+    const cur = stepsEl.querySelector('.cur')
+    if (cur && stepsEl.dataset.idx !== String(j.step_idx) && Date.now() - (S.stepsTouched || 0) > 6000) {
+      const top = cur.offsetTop - stepsEl.offsetTop
+      if (top < stepsEl.scrollTop || top + cur.offsetHeight > stepsEl.scrollTop + stepsEl.clientHeight) stepsEl.scrollTop = Math.max(0, top - stepsEl.clientHeight / 3)
+    }
+    stepsEl.dataset.idx = String(j.step_idx)
+  }
+  if (!stepsEl.dataset.wired) { stepsEl.dataset.wired = '1'; ['wheel', 'pointerdown', 'touchstart', 'keydown'].forEach((t) => stepsEl.addEventListener(t, () => { S.stepsTouched = Date.now() }, { passive: true })) }
   const log = $('#log')
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30
-  log.innerHTML = S.events.filter((e) => e.level !== 'dom').slice(-200).map((e) => `<div class="${e.level}"><time>${clock(e.created_at)}</time><span>${e.step_key ? `[${esc(e.step_key)}] ` : ''}${esc(e.message)}</span></div>`).join('')
-  if (atBottom) log.scrollTop = log.scrollHeight
+  const shown = S.events.filter((e) => e.level !== 'dom')
+  if (log.dataset.n !== String(shown.length)) {
+    log.dataset.n = String(shown.length)
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30
+    const keep = log.scrollTop
+    log.innerHTML = shown.slice(-200).map((e) => `<div class="${e.level}"><time>${clock(e.created_at)}</time><span>${e.step_key ? `[${esc(e.step_key)}] ` : ''}${esc(e.message)}</span></div>`).join('')
+    log.scrollTop = atBottom ? log.scrollHeight : keep
+  }
   const p = j.prompt
-  $('#prompt').innerHTML = p && ['paused', 'waiting'].includes(j.status) ? `
-    <div class="prompt" role="alert">
+  const show = p && ['paused', 'waiting'].includes(j.status)
+  const pEl = $('#prompt')
+  const pSig = show ? JSON.stringify([j.status, p]) : ''
+  if (pEl.dataset.sig !== pSig) {
+    pEl.dataset.sig = pSig
+    const nVals = p?.values ? Object.keys(p.values).length : 0
+    pEl.innerHTML = show ? `
+    <div class="prompt" role="region" aria-live="polite" aria-label="Operator prompt">
       <div class="row" style="justify-content:space-between"><h3>${esc(p.title || 'Your turn')}</h3><span class="pill warn">${esc(p.stepKey || '')}</span></div>
       <p class="small">${esc(p.instruction || p.reason || '')}</p>
-      ${p.values ? `<dl>${Object.entries(p.values).map(([k, val]) => `<dt>${esc(k)}</dt><dd>${esc(val)}</dd><button class="btn sm" data-copy="${esc(val)}" type="button">Copy</button>`).join('')}</dl>` : ''}
       ${p.error ? `<p class="small" style="color:var(--err)">${esc(p.error)}</p>` : ''}
-      <div class="row"><button class="btn primary sm" id="pContinue">Done, continue</button><button class="btn sm" id="pRetry">Retry automation</button><button class="btn sm" id="pSkip">Skip</button></div>
+      <div class="row"><button class="btn primary sm" id="pRetry">Retry automation</button><button class="btn sm" id="pContinue">I did it, continue</button><button class="btn sm" id="pSkip">Skip</button></div>
+      ${nVals ? `<details ${nVals <= 4 ? 'open' : ''}><summary class="small">Values to type (${nVals})</summary><dl>${Object.entries(p.values).map(([k, val]) => `<dt>${esc(k)}</dt><dd>${esc(val)}</dd><button class="btn sm" data-copy="${esc(val)}" type="button">Copy</button>`).join('')}</dl></details>` : ''}
     </div>` : ''
-  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard?.writeText(b.dataset.copy); send({ type: 'type', text: b.dataset.copy }); toast('Typed into the focused SAP field') }))
-  if ($('#pContinue')) { $('#pContinue').onclick = () => send({ type: 'continue' }); $('#pRetry').onclick = () => send({ type: 'retry' }); $('#pSkip').onclick = () => send({ type: 'skip' }) }
+    pEl.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard?.writeText(b.dataset.copy); send({ type: 'type', text: b.dataset.copy }); toast('Typed into the focused SAP field') }))
+    if ($('#pContinue')) { $('#pContinue').onclick = () => send({ type: 'continue' }); $('#pRetry').onclick = () => { send({ type: 'retry' }); toast('Retrying automatically') }; $('#pSkip').onclick = () => send({ type: 'skip' }) }
+  }
+  const pause = $('#ctl [data-c="pause"]'), resume = $('#ctl [data-c="resume"]')
+  if (pause && resume) { pause.disabled = !live || j.status === 'paused'; resume.disabled = !live || j.status !== 'paused' }
 }
 
 async function viewJobs() {
@@ -389,12 +545,13 @@ async function viewJobs() {
   let detail = null
   if (focus) detail = await http(`/jobs/${focus}`).catch(() => null)
   v.innerHTML = `
-  <div class="head"><div><h1>Runs and evidence</h1><p>Every screenshot and DOM capture a run produced, labelled by task and transaction. Download them for the Word deliverable.</p></div>${S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : ''}</div>
+  ${hero('jobs', { title: 'Runs and <span class="grad">evidence</span>', text: 'Every screenshot and DOM capture a run produced, labelled by task and transaction. Use <b>Export submission</b> to put them into a finished Word file in one click.', actions: S.user.role !== 'user' ? `<label class="row small"><input type="checkbox" id="allJobs" ${all ? 'checked' : ''}> Show all users</label>` : '' })}
   <div class="grid3">
     <section class="card scroll" style="grid-column:span 1">
-      <table class="t"><thead><tr><th>#</th><th>Account</th><th>Status</th><th>When</th></tr></thead><tbody>
-      ${S.jobs.map((j) => `<tr><td><button class="btn sm ghost" data-j="${j.id}">${j.id}</button></td><td>${esc(j.sap_user)}${all ? `<div class="small muted">${esc(j.email)}</div>` : ''}</td><td><span class="pill ${j.status === 'done' ? 'ok' : ['failed', 'aborted'].includes(j.status) ? 'err' : 'accent'}">${esc(j.status)}</span></td><td class="small muted">${esc(ago(j.created_at))}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}
+      <table class="t runs-t"><thead><tr><th>#</th><th>Account</th><th>Status</th><th>When</th></tr></thead><tbody>
+      ${S.jobs.map((j) => `<tr${detail && detail.job.id === j.id ? ' class="sel" aria-current="true"' : ''}><td><button class="btn sm ghost" data-j="${j.id}">${j.id}</button></td><td>${esc(j.sap_user)}<div class="small muted">${esc(j.mode)}${duration(j) ? ` · ${esc(duration(j))}` : ''}</div>${all ? `<div class="small muted">${esc(j.email)}</div>` : ''}</td><td><span class="pill ${j.status === 'done' ? 'ok' : ['failed', 'aborted'].includes(j.status) ? 'err' : 'accent'}">${esc(j.status)}</span>${runBar(j)}</td><td class="small muted">${esc(ago(j.created_at))}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}
       </tbody></table>
+      ${S.jobs.length ? '<p class="small muted runbar-key"><i class="ok"></i>verified <i class="sk"></i>skipped, already in SAP <i class="man"></i>by operator <i class="fail"></i>failed</p>' : ''}
     </section>
     <section class="stack" style="grid-column:span 2">
       ${detail ? `
@@ -407,6 +564,96 @@ async function viewJobs() {
   document.querySelectorAll('[data-j]').forEach((b) => b.addEventListener('click', () => { history.replaceState(null, '', `#jobs/${b.dataset.j}`); viewJobs() }))
   $('#allJobs')?.addEventListener('change', (e) => { S.jobsAll = e.target.checked; viewJobs() })
   $('#openCanvas')?.addEventListener('click', () => go('canvas', detail.job.id))
+}
+
+async function viewExport() {
+  const v = $('#view')
+  v.innerHTML = stateHtml('Collecting evidence from your runs')
+  const acc = S.accounts.length ? { accounts: S.accounts } : await http('/me/accounts')
+  S.accounts = acc.accounts
+  if (!S.accounts.length) { v.innerHTML = hero('export', { title: 'Export <span class="grad">submission</span>', text: 'No SAP account has been granted to you yet. Ask the owner to grant a LEARN-### account.' }); return }
+  const lastRun = (S.jobs || []).find((j) => S.accounts.some((a) => a.sap_user === j.sap_user) && j.status === 'done')
+  const sap = S.exportAcc && S.accounts.some((a) => a.sap_user === S.exportAcc) ? S.exportAcc : lastRun?.sap_user || (S.jobs?.length ? null : (await http('/jobs').then((r) => { S.jobs = r.jobs; return r.jobs.find((j) => j.status === 'done' && S.accounts.some((a) => a.sap_user === j.sap_user))?.sap_user }).catch(() => null))) || S.selAccount || S.accounts[0].sap_user
+  S.exportAcc = sap
+  const sub = await http(`/me/submission/${encodeURIComponent(sap)}`)
+  const d = sub.data
+  S.exportOver = S.exportOver?.acc === sap ? S.exportOver : { acc: sap, files: {} }
+  const figs = pickFigures(sub)
+  const status = taskStatus(sub)
+  const base = conclusionIndex(d.suffix)
+  if (S.exportVar?.acc !== sap) S.exportVar = { acc: sap, k: base }
+  const have = FIGURES.filter((f) => (figs[f.name] && !figs[f.name].flag) || S.exportOver.files[f.name]).length
+  const verified = Object.values(status).filter((x) => x.state === 'Verified in SAP' || x.state === 'Done by runner').length
+  const eyeball = Object.values(status).filter((x) => x.state === 'Check screenshot').length
+  const saved = JSON.parse(localStorage.getItem('uc_export') || '{}')
+  const parts = resolveParts(JSON.parse(localStorage.getItem('uc_export_parts') || '{}'))
+  const partsOn = () => EXPORT_PARTS.filter((x) => parts[x.key]).length
+  v.innerHTML = `
+  ${hero('export', { title: 'Export <span class="grad">submission</span>', text: `Builds the IT2406 Word deliverable for ${esc(sap)} in your browser: the required screenshots with capture timestamps, the task status table, all task data tables and a conclusion written for ${esc(d.project)}. No downloading screenshots one by one.`, meta: `<span class="pill ${have === FIGURES.length ? 'ok' : 'warn'}">${have} of ${FIGURES.length} screenshots</span><span class="pill ${verified + eyeball === 14 ? 'ok' : 'warn'}">${verified} verified${eyeball ? ` + ${eyeball} screenshot-only` : ''} of 14 tasks</span><span class="pill">${sub.jobs.length} runs</span>`, actions: `<select class="input" id="expAcc" style="max-width:13rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
+  <div class="export-grid">
+    <div class="stack">
+      <section class="card stack">
+        <div class="row" style="justify-content:space-between"><h2>Required screenshots</h2><span class="small muted">Newest capture per figure across your runs; the two "before" figures (Tasks 3 and 8) use the earliest. Replace any with your own image.</span></div>
+        <div class="meter" aria-label="Screenshots ready"><i style="width:${Math.round(have / FIGURES.length * 100)}%"></i></div>
+        <div class="figs">${FIGURES.map((f) => { const own = S.exportOver.files[f.name]; const e = figs[f.name]; const src = own ? URL.createObjectURL(own) : e ? e.url : ''; return `<figure class="fig ${src ? 'ok' : 'miss'}">
+          <span class="badge pill ${own ? 'accent' : e?.flag ? 'warn' : e ? 'ok' : 'warn'}">${own ? 'your image' : e?.flag ? 'check' : e ? 'captured' : 'missing'}</span>
+          <div class="thumb">${src ? `<img src="${src}" alt="${esc(f.title)}" loading="lazy">` : `<span class="small muted">Task ${f.task} not captured</span>`}</div>
+          <figcaption><b>Task ${f.task}. ${esc(f.title)}</b><span class="muted">${esc(f.tcode)} · ${own ? esc(own.name) : e ? `run #${e.job_id} · ${esc(fmtTime(e.created_at))}` : 'run this task or attach an image'}</span>${!own && e?.flag ? `<span class="small" style="color:var(--warn)">${esc(e.flagNote)}</span>` : ''}${!own && !e && figs[`${f.name}:why`] ? `<span class="small" style="color:var(--warn)">${esc(figs[`${f.name}:why`])}</span>` : ''}
+          <div class="row"><label class="btn sm">${src ? 'Replace' : 'Attach'}<input type="file" accept="image/*" data-over="${f.name}"></label>${own ? `<button class="btn sm ghost" data-unover="${f.name}">Use capture</button>` : ''}</div></figcaption></figure>` }).join('')}</div>
+      </section>
+      <section class="card scroll"><h2>Task status</h2>
+        <table class="t status-t"><thead><tr><th>#</th><th>Task</th><th>Status</th><th>Recorded</th><th>Run</th></tr></thead><tbody>
+        ${Object.entries(status).map(([t, s]) => `<tr><td>${t}</td><td>${esc(S.pack?.tasks?.find((x) => x.id === Number(t))?.title || '')}</td><td><span class="pill ${/Verified|Done/.test(s.state) ? 'ok' : s.state === 'Failed' ? 'err' : 'warn'}">${esc(s.state)}</span></td><td class="small muted">${esc(fmtTime(s.at))}</td><td class="small">${s.job ? `#${s.job}` : ''}</td></tr>`).join('')}
+        </tbody></table></section>
+    </div>
+    <aside class="stack">
+      <section class="card stack">
+        <h2>Cover page</h2>
+        <div class="field"><label for="expName">Student name</label><input class="input" id="expName" value="${esc(saved.name ?? sub.user.name ?? '')}" autocomplete="name"></div>
+        <div class="field"><label for="expSec">Section</label><input class="input" id="expSec" value="${esc(saved.section || '')}" placeholder="e.g. BSIT 3A"></div>
+        <button class="btn primary huge" id="expGo"><span>Export Submission Package (.docx)</span></button>
+        <p class="small muted" id="expProg" aria-live="polite">One file: ${esc(fileName(d))}</p>
+      </section>
+      <section class="card stack parts">
+        <div class="row" style="justify-content:space-between"><h2>In the document</h2><span class="pill" id="partsN">${partsOn()} of ${EXPORT_PARTS.length} extras</span></div>
+        <p class="small muted">Screenshots, captions and the conclusion text are always included. Extras below stay out of the .docx unless you switch them on.</p>
+        <ul class="part-list">${EXPORT_PARTS.map((x) => `<li><label class="part"><input type="checkbox" data-part="${x.key}" ${parts[x.key] ? 'checked' : ''}><span><b>${esc(x.label)}</b><span class="small muted">${esc(x.hint)}</span></span></label></li>`).join('')}</ul>
+        <div class="row"><button class="btn sm" id="partsAll">Include all</button><button class="btn sm ghost" id="partsNone">Clean default</button></div>
+      </section>
+      <section class="card stack concl">
+        <div class="row" style="justify-content:space-between"><h2>Conclusion</h2><span class="pill">variant <b id="cvN">${S.exportVar.k + 1}</b> / ${CONCLUSION_COUNT}</span></div>
+        <div id="cvText">${conclusion(d, S.exportVar.k).map((x) => `<p>${esc(x)}</p>`).join('')}</div>
+        <div class="concl-nav"><button class="btn sm" id="cvPrev">Previous</button><button class="btn sm" id="cvNext">Next</button><button class="btn sm" id="cvRand">Shuffle</button><button class="btn sm ghost" id="cvBase">Default for ${esc(sap)}</button></div>
+        <p class="small muted">${CONCLUSION_COUNT} conclusions per LEARN-### with no sentence repeated between them. The default is fixed per account, so classmates start from different text.</p>
+      </section>
+    </aside>
+  </div>`
+  const paintConcl = () => { $('#cvN').textContent = S.exportVar.k + 1; $('#cvText').innerHTML = conclusion(d, S.exportVar.k).map((x) => `<p>${esc(x)}</p>`).join('') }
+  const step = (n) => { S.exportVar.k = (S.exportVar.k + n + CONCLUSION_COUNT) % CONCLUSION_COUNT; paintConcl() }
+  $('#cvPrev').onclick = () => step(-1)
+  $('#cvNext').onclick = () => step(1)
+  $('#cvRand').onclick = () => { let k; do { k = Math.floor(Math.random() * CONCLUSION_COUNT) } while (k === S.exportVar.k); S.exportVar.k = k; paintConcl() }
+  $('#cvBase').onclick = () => { S.exportVar.k = base; paintConcl() }
+  $('#expAcc').onchange = (e) => { S.exportAcc = e.target.value; viewExport() }
+  document.querySelectorAll('[data-over]').forEach((i) => i.addEventListener('change', () => { const f = i.files[0]; if (!f) return; if (!f.type.startsWith('image/')) return toast('Pick an image file', true); S.exportOver.files[i.dataset.over] = f; viewExport() }))
+  document.querySelectorAll('[data-unover]').forEach((b) => b.addEventListener('click', () => { delete S.exportOver.files[b.dataset.unover]; viewExport() }))
+  const remember = () => localStorage.setItem('uc_export', JSON.stringify({ name: $('#expName').value, section: $('#expSec').value }))
+  $('#expName').oninput = remember; $('#expSec').oninput = remember
+  const saveParts = () => { localStorage.setItem('uc_export_parts', JSON.stringify(parts)); $('#partsN').textContent = `${partsOn()} of ${EXPORT_PARTS.length} extras` }
+  document.querySelectorAll('[data-part]').forEach((i) => i.addEventListener('change', () => { parts[i.dataset.part] = i.checked; saveParts() }))
+  const setAll = (on) => { EXPORT_PARTS.forEach((x) => { parts[x.key] = on }); document.querySelectorAll('[data-part]').forEach((i) => { i.checked = on }); saveParts() }
+  $('#partsAll').onclick = () => setAll(true)
+  $('#partsNone').onclick = () => setAll(false)
+  $('#expGo').onclick = run(async () => {
+    const btn = $('#expGo'); btn.disabled = true; btn.classList.add('busy')
+    try {
+      const blob = await buildSubmission(sub, { student: $('#expName').value.trim(), section: $('#expSec').value.trim(), variant: S.exportVar.k, overrides: S.exportOver.files, include: { ...parts } }, (m) => { $('#expProg').textContent = m })
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileName(d); document.body.append(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000)
+      $('#expProg').textContent = `Saved ${fileName(d)} (${(blob.size / 1048576).toFixed(1)} MB)`
+      toast('Submission package downloaded')
+    } finally { btn.disabled = false; btn.classList.remove('busy') }
+  })
 }
 
 function verifiedTable(events) {
@@ -439,6 +686,7 @@ async function viewPlan() {
   const sap = S.selAccount || S.accounts[0]?.sap_user || 'LEARN-000'
   const plan = await http(`/me/plan/${encodeURIComponent(sap)}`)
   const d = plan.data
+  S.planData = d
   const acts = [...d.activities, { act: '0045', desc: d.external.desc, dur: '0', work: '', wc: 'external', wbs: `${d.project}-1` }, { act: '0135', desc: d.primCost.desc, dur: '0', work: '', wc: 'primary cost', wbs: `${d.project}-5` }]
   const c = cpm(acts, d.relationships)
   const cols = {}
@@ -451,12 +699,16 @@ async function viewPlan() {
   const desc = Object.fromEntries(acts.map((a) => [a.act, a.desc]))
   const svg = `<svg class="net" viewBox="0 0 ${svgW} ${svgH}" role="img" aria-label="Network plan with critical path"><defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="currentColor" stroke="none"/></marker></defs>${d.relationships.map((r) => { const a = pos[r.from], b = pos[r.to]; if (!a || !b) return ''; const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2, mx = (x1 + x2) / 2; const crit = c.crit.has(r.from) && c.crit.has(r.to) && c.ef[r.from] === c.es[r.to]; return `<path class="${crit ? 'crit' : ''}" style="color:var(${crit ? '--accent' : '--muted'})" marker-end="url(#ar)" d="M${x1} ${y1}C${mx} ${y1} ${mx} ${y2} ${x2 - 2} ${y2}"/>` }).join('')}${acts.map((a) => { const p = pos[a.act]; return `<g class="node${c.crit.has(a.act) && Number(a.dur) > 0 ? ' crit' : ''}"><title>${esc(a.act)} ${esc(a.desc)}, ES ${c.es[a.act]} EF ${c.ef[a.act]}</title><rect x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="8"/><text x="${p.x + 10}" y="${p.y + 18}">${a.act}${Number(a.dur) ? ` · ${a.dur}d` : ''}</text><text class="d" x="${p.x + 10}" y="${p.y + 34}">${esc(desc[a.act].slice(0, 20))}${desc[a.act].length > 20 ? '…' : ''}</text></g>` }).join('')}</svg>`
   v.innerHTML = `
-  <div class="head"><div><h1>Project data for ${esc(d.project)}</h1><p>Every value the pack types, generated from the task sheet with suffix ${esc(d.suffix)}. The network is computed from the 22 relationships with finish-to-start logic and normal durations.</p></div>
-  <select class="input" id="planAcc" style="max-width:14rem" aria-label="Account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select></div>
+  ${hero('plan', { title: `Project data for <span class="grad">${esc(d.project)}</span>`, text: `Every value the pack types, generated from the task sheet with suffix ${esc(d.suffix)}. The network is computed from the 22 relationships with finish-to-start logic and normal durations.`, actions: `<select class="input" id="planAcc" style="max-width:14rem" aria-label="Account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select>` })}
   <section class="card stack" style="margin-bottom:1rem">
     <div class="row" style="justify-content:space-between"><h2>Network plan</h2><span class="small muted">Zero-float activities ${[...c.crit].filter((n) => Number(acts.find((a) => a.act === n).dur) > 0).sort().join(', ')} · project length ${c.end} working days</span></div>
     <div class="scroll">${svg}</div>
     <p class="small muted">0045 and 0135 carry no normal duration in the task sheet, so they show as zero-length here. In SAP, 0135 becomes flexible in Task 10 and stretches to match 0130.</p>
+  </section>
+  <section class="card stack" style="margin-bottom:1rem">
+    <div class="row" style="justify-content:space-between"><h2>Schedule</h2><span class="small muted gantt-key"><i class="crit"></i>zero float <i></i>has float <i class="fl"></i>float to late finish <i class="zero"></i>no duration</span></div>
+    <div class="scroll">${gantt(acts, c)}</div>
+    <p class="small muted">Working days from project start, earliest dates, from the same 22 finish-to-start links as the network above. Hover a bar for its dates and float.</p>
   </section>
   <div class="grid2">
     <section class="card scroll"><h2>WBS and responsibilities</h2><table class="t"><thead><tr><th>Lvl</th><th>WBS</th><th>Description</th><th>Resp. cost centre</th></tr></thead><tbody>${d.wbs.map((w) => `<tr><td>${w.level}</td><td class="mono">${esc(w.wbs)}</td><td>${esc(w.desc)}</td><td class="mono">${w.costCenter}</td></tr>`).join('')}</tbody></table></section>
@@ -470,10 +722,166 @@ async function viewPlan() {
   $('#planAcc')?.addEventListener('change', (e) => { S.selAccount = e.target.value; viewPlan() })
 }
 
+const sheetCache = {}
+async function loadSheet(sap) { return (sheetCache[sap] = sheetCache[sap] || await http(`/me/sheet/${encodeURIComponent(sap)}`)) }
+
+const valuesHtml = (v) => {
+  if (!v) return ''
+  if (v.rows) return `<ol class="vals rows">${v.rows.map((r) => `<li class="mono">${esc(r)}</li>`).join('')}</ol>`
+  return `<dl class="vals">${Object.entries(v).map(([k, x]) => `<dt>${esc(k)}</dt><dd class="mono">${esc(x)}</dd>`).join('')}</dl>`
+}
+
+const taskCard = (t, status, docLink) => `
+  <article class="card sheet-task" id="task-${t.id}">
+    <header class="row" style="justify-content:space-between">
+      <h2>${t.id}. ${esc(t.title)}</h2>
+      <div class="row small">${status || ''}<span class="pill">${esc(t.role)}</span><code>${esc(t.txn)}</code>${t.shot ? '<span class="pill accent">screenshot</span>' : ''}${docLink || ''}</div>
+    </header>
+    <p class="check-how"><b>How to check it yourself:</b> ${esc(t.how)}</p>
+    <ol class="sheet-steps">${t.steps.map((s) => `<li><span class="k mono">${esc(s.key)}</span><div><div>${esc(s.label)}${s.op === 'manual' ? ' <span class="pill warn">you</span>' : ''}</div>${s.instruction ? `<p class="small muted">${esc(s.instruction)}</p>` : ''}${valuesHtml(s.values)}</div></li>`).join('')}</ol>
+  </article>`
+
+const valPill = (v) => !v ? '<span class="pill">not checked</span>' : v.level === 'ok' ? '<span class="pill ok">done in SAP</span>' : v.level === 'warn' ? '<span class="pill warn">check evidence</span>' : '<span class="pill err">not done</span>'
+
+async function viewSheet() {
+  const v = $('#view')
+  v.innerHTML = stateHtml('Loading the task sheet')
+  if (!S.accounts.length) { const acc = await http('/me/accounts'); S.accounts = acc.accounts }
+  const sap = S.selAccount || S.accounts[0]?.sap_user || 'LEARN-000'
+  const [sheet, docs, ready] = await Promise.all([loadSheet(sap), http('/me/docs'), http('/me/readiness').catch(() => null)])
+  const doc = docs.docs[0]
+  const val = ready?.accounts.find((a) => a.sapUser === sap)?.validation
+  const focus = Number(location.hash.split('/')[1]) || 0
+  const d = sheet.data
+  v.innerHTML = `
+  <div class="no-print">${hero('sheet', { title: `Task sheet for <span class="grad">${esc(sheet.project)}</span>`, text: `Every value the pack types for ${esc(sheet.sapUser)}, task by task, with what a correct result looks like in SAP. Print it or save it as a PDF to keep beside SAP, or check your own work against it.`, actions: `<div class="row"><select class="input" id="sheetAcc" style="max-width:12rem" aria-label="SAP account">${S.accounts.map((x) => `<option ${x.sap_user === sap ? 'selected' : ''}>${esc(x.sap_user)}</option>`).join('')}</select><button class="btn primary" id="printSheet">Print / Save as PDF</button></div>` })}</div>
+  <div class="sheet-layout">
+    <nav class="card sheet-toc no-print" aria-label="Tasks">
+      <h3>Tasks</h3>
+      <ol>${sheet.tasks.map((t) => `<li><a href="#sheet/${t.id}" data-jump="${t.id}">${esc(t.title)}</a>${val ? ` ${valPill(val.tasks[t.id])}` : ''}</li>`).join('')}</ol>
+      ${val ? `<p class="small muted">Status from validate run #${val.jobId}, ${esc(ago(val.at))}. <a href="#ready">Readiness</a></p>` : '<p class="small muted">Start a run in <b>Validate</b> mode to see which tasks are already done in SAP.</p>'}
+      ${doc ? `<p class="small"><a href="#" id="openDoc">Open ${esc(doc.name)}</a></p>` : S.user.role !== 'user' ? '<p class="small muted">Upload the official task PDF in the Owner console to link its pages here.</p>' : ''}
+    </nav>
+    <div class="stack sheet-body">
+      <section class="card print-only"><h2>IT2406 Performance Task 1 · ${esc(sheet.sapUser)} · ${esc(sheet.project)}</h2><p>Generated ${esc(new Date().toLocaleString())} from the Ultralight Project Builder pack.</p></section>
+      <section class="card"><h2>Key values</h2><dl class="kv" style="margin-top:.6rem">
+        <dt>Project</dt><dd class="mono">${esc(d.project)} · ${esc(d.projectText)}</dd><dt>Profile</dt><dd class="mono">${esc(d.profile)}</dd>
+        <dt>CO area / company code</dt><dd class="mono">${esc(d.controllingArea)} / ${esc(d.companyCode)}</dd><dt>Supplier</dt><dd class="mono">${esc(d.supplier)}</dd>
+        <dt>PS text</dt><dd class="mono">${esc(d.psText)}</dd><dt>Expected actual costs</dt><dd class="mono">1,750.00 after Task 11 · 11,450.00 after Task 13</dd></dl></section>
+      ${sheet.tasks.map((t) => taskCard(t, val ? valPill(val.tasks[t.id]) : '', doc?.task_pages?.[t.id] ? `<a class="btn sm no-print" href="#" data-docpage="${doc.task_pages[t.id]}">PDF p.${doc.task_pages[t.id]}</a>` : '')).join('')}
+    </div>
+  </div>
+  <div class="pdfview" id="pdfview" hidden><div class="pdfbar"><b id="pdfname"></b><button class="btn sm" id="pdfclose">Close</button></div><iframe id="pdfframe" title="Task PDF"></iframe></div>`
+  $('#sheetAcc').onchange = (e) => { S.selAccount = e.target.value; viewSheet() }
+  $('#printSheet').onclick = () => window.print()
+  document.querySelectorAll('[data-jump]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); history.replaceState(null, '', `#sheet/${a.dataset.jump}`); $(`#task-${a.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }))
+  const openDoc = run(async (page) => { await showPdf(doc, page) })
+  $('#openDoc')?.addEventListener('click', (e) => { e.preventDefault(); openDoc(1) })
+  document.querySelectorAll('[data-docpage]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); openDoc(Number(b.dataset.docpage)) }))
+  $('#pdfclose').onclick = () => { $('#pdfview').hidden = true }
+  if (focus) requestAnimationFrame(() => $(`#task-${focus}`)?.scrollIntoView({ block: 'start' }))
+}
+
+const pdfUrls = {}
+async function pdfUrl(doc) {
+  if (pdfUrls[doc.id]) return pdfUrls[doc.id]
+  const parts = []
+  for (let i = 0; i < doc.chunks; i++) { const r = await fetch(`/api/me/docs/${doc.id}/${i}`, { credentials: 'same-origin' }); if (!r.ok) throw new Error('Could not load the PDF'); parts.push(await r.text()) }
+  const bin = atob(parts.join(''))
+  const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
+  return (pdfUrls[doc.id] = URL.createObjectURL(new Blob([u8], { type: 'application/pdf' })))
+}
+async function showPdf(doc, page = 1) {
+  toast('Loading PDF')
+  const u = await pdfUrl(doc)
+  $('#pdfname').textContent = `${doc.name} · page ${page}`
+  $('#pdfframe').src = `${u}#page=${page}`
+  $('#pdfview').hidden = false
+}
+
+async function paintDrawer() {
+  const d = $('#drawer')
+  if (!d || d.hidden || !S.job) return
+  const sheet = await loadSheet(S.job.sap_user)
+  const steps = S.plan?.steps || []
+  const cur = steps[Math.min(S.job.step_idx, Math.max(steps.length - 1, 0))]
+  const tid = S.drawerTask || cur?.task || S.job.tasks[0]
+  const t = sheet.tasks.find((x) => x.id === tid) || sheet.tasks[0]
+  d.innerHTML = `<div class="row" style="justify-content:space-between"><h3>Task sheet</h3><button class="btn sm ghost" id="drClose">Close</button></div>
+    <select class="input" id="drTask" aria-label="Task">${sheet.tasks.map((x) => `<option value="${x.id}" ${x.id === t.id ? 'selected' : ''}>${x.id}. ${esc(x.title)}${cur?.task === x.id ? ' (current)' : ''}</option>`).join('')}</select>
+    ${taskCard(t, '', '')}
+    <a class="btn sm" href="#sheet/${t.id}">Open full sheet</a>`
+  $('#drClose').onclick = () => { d.hidden = true; $('#sheetBtn').setAttribute('aria-expanded', 'false') }
+  $('#drTask').onchange = run(async (e) => { S.drawerTask = Number(e.target.value); await paintDrawer() })
+}
+
+async function viewReady() {
+  const v = $('#view')
+  v.innerHTML = stateHtml('Checking runners and accounts')
+  const [r, pack] = await Promise.all([http('/me/readiness'), S.pack || http('/pack').catch(() => null)])
+  S.pack = pack
+  const onlineRunners = r.runners.filter((x) => x.online)
+  const owner = S.user.role !== 'user'
+  const item = (ok, title, detail, fix) => `<li class="ready-item ${ok === true ? 'ok' : ok === false ? 'err' : 'warn'}"><span class="dot" aria-hidden="true"></span><div><b>${esc(title)}</b><div class="small muted">${detail}</div>${ok !== true && fix ? `<div class="small fix">${fix}</div>` : ''}</div><span class="pill ${ok === true ? 'ok' : ok === false ? 'err' : 'warn'}">${ok === true ? 'ready' : ok === false ? 'fix' : 'check'}</span></li>`
+  const runnerCards = r.runners.map((x) => {
+    const i = x.info || {}
+    const ver = x.version || i.version || 'unknown'
+    return `<section class="card stack"><div class="row" style="justify-content:space-between"><h2>${esc(x.name)}</h2>${x.online ? '<span class="pill ok">online</span>' : `<span class="pill err">offline · seen ${esc(ago(x.lastSeen))}</span>`}</div><ul class="ready">
+      ${item(x.online, 'Connected to this site', `last poll ${esc(ago(x.lastSeen))}`, 'Start the runner: <code>npm start</code>. On Oracle: <code>sudo systemctl start ultralight-runner</code>')}
+      ${item(ver === r.latest, `Runner version ${esc(ver)}`, ver === r.latest ? 'current' : `this site expects ${esc(r.latest)}`, 'On the runner machine: <code>git pull && cd runner && npm install</code>, then restart it')}
+      ${owner ? (i.host ? item(true, `Host ${esc(i.host)}`, `${esc(i.platform)} · Node ${esc(i.node)} · ${esc(i.cpus)} CPU · ${esc(i.memMb)} MB · Chromium ${esc(i.chromium)}`) : item(null, 'Host details', 'Runner 1.2 reports its host, SAP reachability and local accounts. Older runners do not.', 'Update the runner to 1.2')) : ''}
+      ${i.sap ? item(!!i.sap.ok, `Reaches SAP ${esc(i.sapHost)}`, i.sap.ok ? `HTTP ${esc(i.sap.status)} in ${esc(i.sap.ms)} ms, ${esc(ago(x.infoAt))}` : esc(i.sap.error || `HTTP ${i.sap.status}`), 'The machine needs outbound HTTPS to the SAP host') : ''}
+      ${owner && i.accounts ? item(i.accounts.length > 0, 'Local SAP accounts', i.accounts.length ? esc(i.accounts.join(', ')) : 'none: every run must carry its password', 'Add <code>SAP_ACCOUNTS=LEARN-###:password</code> to <code>runner/.env</code>') : ''}
+      ${item(true, 'Token scope', x.accounts.length ? esc(x.accounts.join(', ')) : 'all accounts')}
+    </ul></section>`
+  }).join('')
+  v.innerHTML = `
+  ${hero('ready', { title: '<span class="grad">Readiness</span>', text: 'Everything a run needs, checked from here. Runners report their host and SAP reachability every 10 minutes. The task grid comes from the last <b>Validate</b> run, which reads SAP without changing anything.', actions: '<button class="btn" id="reRead">Refresh</button>' })}
+  <section class="card" style="margin-bottom:1rem"><ul class="ready">
+    ${item(r.runners.length > 0, 'Runner token issued', r.runners.length ? `${r.runners.length} active token(s)` : 'none', owner ? 'Owner console > Runners > Create token' : 'Ask the owner')}
+    ${item(onlineRunners.length > 0, 'A runner is online', onlineRunners.length ? esc(onlineRunners.map((x) => x.name).join(', ')) : 'none online right now', 'Start a runner. To keep one running with your PC off, host it on Oracle Cloud (Setup guide)')}
+    ${item(r.accounts.length > 0, 'SAP account available to you', r.accounts.length ? esc(r.accounts.map((a) => a.sapUser).join(', ')) : 'none granted', owner ? 'Owner console > SAP accounts, then tick it for the user' : 'Ask the owner to grant a LEARN-### account')}
+  </ul></section>
+  ${r.accounts.map((a) => {
+    const on = a.runners.filter((x) => x.online)
+    const pw = a.runners.some((x) => x.holdsPassword)
+    const val = a.validation
+    return `<section class="card stack" style="margin-bottom:1rem"><div class="row" style="justify-content:space-between"><h2>${esc(a.sapUser)} · ${esc(a.project)}</h2><div class="row"><button class="btn sm primary" data-val="${esc(a.sapUser)}" ${on.length ? '' : 'disabled title="No runner online"'}>Validate all tasks in SAP</button><a class="btn sm" href="#sheet">Task sheet</a></div></div>
+      <ul class="ready">
+        ${item(on.length > 0, 'Runner can take this account', on.length ? esc(on.map((x) => x.name).join(', ')) : a.runners.length ? 'the runner that covers it is offline' : 'no runner token covers it', 'Start the runner, or issue a token without an account limit')}
+        ${item(pw ? true : null, 'SAP password on the runner', pw ? 'held in runner/.env, runs start without asking' : 'not held: type it on Run pack for each run', 'Optional: add it to SAP_ACCOUNTS in runner/.env')}
+        ${a.lastRun ? item(a.lastRun.status === 'done' ? true : null, `Last run #${a.lastRun.id} ${esc(a.lastRun.status)}`, `${esc(a.lastRun.mode)} · tasks ${esc(a.lastRun.tasks.join(', '))} · ${esc(a.lastRun.result?.summary || '')} · ${esc(ago(a.lastRun.finished_at || a.lastRun.created_at))}`) : ''}
+      </ul>
+      <h3>Tasks in SAP</h3>
+      ${val ? `<p class="small muted">From validate run #${val.jobId}, ${esc(ago(val.at))}: ${esc(val.result?.summary || '')}</p>` : '<p class="small muted">No validate run yet. It logs in, opens the project and the cost report, and reads what is there. Nothing is saved.</p>'}
+      <div class="val-grid">${(S.pack?.tasks || []).map((t) => { const x = val?.tasks[t.id]; return `<a class="val-cell ${!x ? '' : x.level === 'ok' ? 'ok' : x.level === 'warn' ? 'warn' : 'err'}" href="#sheet/${t.id}" title="${esc(x?.message || 'not checked yet')}"><b>${t.id}</b><span>${esc(t.title)}</span><em>${!x ? 'not checked' : x.level === 'ok' ? 'done' : x.level === 'warn' ? 'check evidence' : 'not done'}</em></a>` }).join('')}</div>
+      ${val ? `<details><summary class="small">What the runner read</summary><ul class="small mono val-detail">${Object.entries(val.tasks).map(([k, x]) => `<li><b>${esc(k)}</b> ${esc(x.message)}</li>`).join('')}</ul></details>` : ''}
+    </section>` }).join('')}
+  <h2 style="margin:1.4rem 0 .8rem">Runners</h2>
+  <div class="grid2">${runnerCards || '<p class="muted">No runner tokens yet.</p>'}</div>`
+  $('#reRead').onclick = () => viewReady()
+  document.querySelectorAll('[data-val]').forEach((b) => b.addEventListener('click', run(async () => {
+    const res = await http('/jobs', { method: 'POST', body: { sapUser: b.dataset.val, tasks: [], mode: 'validate' } }).catch((err) => { if (err.data?.jobId) { go('canvas', err.data.jobId); return null } throw err })
+    if (res) { toast(`Validate run #${res.id} queued`); go('canvas', res.id) }
+  })))
+}
+
+async function paintDocs() {
+  const el = $('#docList'); if (!el) return
+  const { docs } = await http('/me/docs')
+  el.innerHTML = docs.length ? docs.map((d, n) => `<div class="stack doc-item">
+    <div class="row" style="justify-content:space-between"><div><b>${esc(d.name)}</b> <span class="small muted">${(d.size / 1048576).toFixed(1)} MB · ${esc(fmtTime(d.created_at))}${n === 0 ? ' · shown to users' : ''}</span></div><button class="btn sm danger" data-deldoc="${d.id}">Remove</button></div>
+    <details ${n === 0 && !Object.keys(d.task_pages).length ? 'open' : ''}><summary class="small">Task to page map (${Object.keys(d.task_pages).length} of 14 set)</summary>
+      <form class="pagemap" data-pm="${d.id}">${Array.from({ length: 14 }, (_, i) => `<label class="small">Task ${i + 1}<input class="input" type="number" min="1" name="${i + 1}" value="${esc(d.task_pages[i + 1] || '')}"></label>`).join('')}<button class="btn sm">Save pages</button></form>
+    </details></div>`).join('') : '<p class="small muted">No PDF uploaded yet.</p>'
+  el.querySelectorAll('[data-deldoc]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Remove this PDF?')) return; await http(`/admin/docs/${b.dataset.deldoc}`, { method: 'DELETE' }); paintDocs() })))
+  el.querySelectorAll('[data-pm]').forEach((f) => f.addEventListener('submit', run(async (e) => { e.preventDefault(); const taskPages = Object.fromEntries([...new FormData(f)].filter(([, x]) => x)); await http(`/admin/docs/${f.dataset.pm}`, { method: 'POST', body: { taskPages } }); toast('Page map saved') })))
+}
+
 function viewGuide() {
   const origin = location.origin
   $('#view').innerHTML = `
-  <div class="head"><div><h1>Setup guide</h1><p>Three pieces: this control site on Cloudflare, one runner on a machine that can reach SAP, and your approval for every user.</p></div></div>
+  ${hero('guide', { title: 'Setup <span class="grad">guide</span>', text: 'Three pieces: this control site on Cloudflare, one runner on a machine that can reach SAP, and your approval for every user.' })}
   <div class="grid2 guide">
     <section class="card"><h2>Owner: first run</h2><ol>
       <li>Sign up first. The first account becomes the owner. If <code>SETUP_KEY</code> is set, enter it.</li>
@@ -492,6 +900,20 @@ npx playwright install --with-deps chromium</pre></li>
 RUNNER_TOKEN=ucr_xxxxxxxx
 SAP_ACCOUNTS=LEARN-###:password,LEARN-###:otherpassword</pre>Passwords here stay on the runner. Leave them out to require the password per run.</li>
       <li>Start it:<pre>npm start</pre>The Owner console shows it online within 5 seconds.</li>
+    </ol></section>
+    <section class="card"><h2>Always on: Oracle Cloud runner</h2><ol>
+      <li>Oracle console → Compute → <b>Create instance</b>. Image <b>Ubuntu 22.04</b> or <b>24.04</b>. Shape <b>VM.Standard.A1.Flex</b> (Always Free Ampere, 1 OCPU / 6 GB is plenty) or VM.Standard.E2.1.Micro (1 GB, the script adds swap). Keep the default public subnet, add your SSH key.</li>
+      <li>No inbound ports are needed. The runner only makes outbound HTTPS calls to this site and to <code>m53p.ucc.cloud</code>.</li>
+      <li>Owner console → Runners → create a token named <code>oracle</code>. Revoke the token of the runner on your PC once Oracle shows online, so only one runner claims jobs.</li>
+      <li>SSH in and run:<pre>curl -fsSL https://raw.githubusercontent.com/Tiredicey/ultralight-project-builder/main/deploy/oracle/setup.sh | bash</pre>It installs Node 20 and Chromium, asks for the site URL, the token and <code>LEARN-###:password</code>, runs the self-check, and installs a systemd service that starts on boot.</li>
+      <li>Open <b>Readiness</b>: the Oracle runner shows online with its host name and SAP reachability. You can shut your PC down.</li>
+      <li>Logs <code>sudo journalctl -u ultralight-runner -f</code>. Update by running the same command again.</li>
+    </ol></section>
+    <section class="card"><h2>Check your setup</h2><ol>
+      <li>On the runner machine: <code>cd runner && npm run doctor</code>. It checks Node, <code>.env</code>, the token against this site, SAP reachability and Chromium, and prints a fix for every failure. It does not log in to SAP.</li>
+      <li>Here: <b>Readiness</b> lists every runner (version, host, SAP reachability) and every SAP account you can use.</li>
+      <li>Press <b>Validate all tasks in SAP</b> there, or start a run in <b>Validate</b> mode. The runner logs in, reads the project tree, relationships, activity 0135 and the cost report, and marks each task done or not done. Nothing is saved.</li>
+      <li><b>Task sheet</b> lists every value per task with how to check it by hand, and prints to PDF.</li>
     </ol></section>
     <section class="card"><h2>Running a pack</h2><ol>
       <li>Run pack → pick account and tasks → mode. Assist is the safe default.</li>
@@ -514,8 +936,7 @@ async function viewAdmin() {
   const a = await http('/admin/overview')
   S.admin = a
   v.innerHTML = `
-  <div class="head"><div><h1>Owner console</h1><p>Nobody reaches the canvas until you approve them and grant a SAP account. Every decision lands in the audit log.</p></div>
-  <label class="row small">Registration <select class="input" id="reg" style="width:auto"><option ${a.registration === 'open' ? 'selected' : ''} value="open">open</option><option ${a.registration === 'closed' ? 'selected' : ''} value="closed">closed</option></select></label></div>
+  ${hero('admin', { title: 'Owner <span class="grad">console</span>', text: 'Nobody reaches the canvas until you approve them and grant a SAP account. Every decision lands in the audit log.', meta: `<span class="pill warn">${a.users.filter((u) => u.status === 'pending').length} pending</span><span class="pill">${a.users.length} people</span><span class="pill">${a.accounts.length} SAP accounts</span><span class="pill ok">${a.runners.filter((r) => r.online && !r.revoked).length} runners online</span>`, actions: `<label class="row small">Registration <select class="input" id="reg" style="width:auto"><option ${a.registration === 'open' ? 'selected' : ''} value="open">open</option><option ${a.registration === 'closed' ? 'selected' : ''} value="closed">closed</option></select></label>` })}
   <section class="card scroll" style="margin-bottom:1rem"><h2>People</h2>
     <table class="t" style="margin-top:.5rem"><thead><tr><th>User</th><th>Status</th><th>Role</th><th>SAP accounts</th><th></th></tr></thead><tbody>
     ${a.users.map((u) => `<tr><td><b>${esc(u.name)}</b><div class="small muted">${esc(u.email)}</div>${u.note ? `<div class="small">${esc(u.note)}</div>` : ''}</td>
@@ -526,22 +947,56 @@ async function viewAdmin() {
     </tbody></table></section>
   <div class="grid2">
     <section class="card stack"><h2>SAP accounts, client 236</h2>
-      <form class="row" id="addAcc"><input class="input" name="sapUser" placeholder="LEARN-###" required pattern="[Ll][Ee][Aa][Rr][Nn]-\\d{3}" style="max-width:10rem"><input class="input" name="label" placeholder="Label (optional)" style="max-width:12rem"><button class="btn sm primary">Add</button></form>
+      <form class="row" id="addAcc"><input class="input" name="sapUser" placeholder="LEARN-###, LEARN-### ..." required aria-label="One or more LEARN-### accounts, comma separated" style="max-width:16rem"><input class="input" name="label" placeholder="Label (optional)" style="max-width:12rem"><button class="btn sm primary">Add</button></form>
       <table class="t"><tbody>${a.accounts.map((acc) => `<tr><td class="mono">${esc(acc.sap_user)}</td><td>${esc(acc.label || '')}</td><td class="mono small">P/2${esc(acc.sap_user.slice(-3))}</td><td><button class="btn sm danger" data-delacc="${acc.id}">Remove</button></td></tr>`).join('') || '<tr><td class="muted">None yet</td></tr>'}</tbody></table>
     </section>
     <section class="card stack"><h2>Runners</h2>
       <form class="row" id="addRun"><input class="input" name="name" placeholder="Runner name" required style="max-width:12rem"><input class="input" name="accounts" placeholder="Limit to LEARN-### (comma, optional)"><button class="btn sm primary">Create token</button></form>
       <div id="newTok"></div>
-      <table class="t"><tbody>${a.runners.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${r.accounts.length ? esc(r.accounts.join(', ')) : 'all accounts'}${r.version ? ` · v${esc(r.version)}` : ''}</div></td><td>${r.revoked ? '<span class="pill err">revoked</span>' : r.online ? '<span class="pill ok">online</span>' : `<span class="pill">seen ${esc(ago(r.last_seen))}</span>`}</td><td>${r.revoked ? '' : `<button class="btn sm danger" data-rev="${r.id}">Revoke</button>`}</td></tr>`).join('') || '<tr><td class="muted">No runners</td></tr>'}</tbody></table>
+      <table class="t"><tbody>${a.runners.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${r.accounts.length ? esc(r.accounts.join(', ')) : 'all accounts'}${r.version ? ` · v${esc(r.version)}` : ''}</div></td><td>${r.revoked ? '<span class="pill err">revoked</span>' : r.online ? '<span class="pill ok">online</span>' : `<span class="pill">seen ${esc(ago(r.last_seen))}</span>`}</td><td>${r.revoked ? '' : `<div class="row"><input class="input" data-limit="${r.id}" value="${esc(r.accounts.join(', '))}" placeholder="all accounts" aria-label="Accounts this runner may drive" style="width:11rem"><button class="btn sm" data-savelimit="${r.id}">Save limit</button><button class="btn sm danger" data-rev="${r.id}">Revoke</button></div>`}</td></tr>`).join('') || '<tr><td class="muted">No runners</td></tr>'}</tbody></table>
     </section>
   </div>
+  <section class="card stack" id="usage-card" style="margin-top:1rem" aria-live="polite"><div class="row" style="justify-content:space-between"><h2>Database allowance today</h2><span class="small muted" id="usage-reset"></span></div><div id="usage-body" class="small muted">Checking Cloudflare...</div></section>
   <section class="card scroll" style="margin-top:1rem"><h2>Audit log</h2><table class="t"><tbody>${a.audit.map((x) => `<tr><td class="small muted">${esc(fmtTime(x.created_at))}</td><td>${esc(x.email || '')}</td><td class="mono small">${esc(x.action)}</td><td class="small mono">${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></section>`
+  v.insertAdjacentHTML('beforeend', `
+  <div class="grid2" style="margin-top:1rem">
+    <section class="card stack" style="align-content:start"><h2>Task PDF</h2>
+      <p class="small muted">Upload the official task sheet. Everyone you approved can open it from Task sheet, and each task links to its page. Stored in D1, max 20 MB.</p>
+      <form class="row" id="docForm"><input class="input" type="file" id="docFile" accept="application/pdf,.pdf" required style="max-width:22rem"><button class="btn sm primary">Upload</button></form>
+      <div id="docProg" class="small muted" aria-live="polite"></div>
+      <div id="docList"></div>
+    </section>
+    <section class="card stack" style="align-content:start"><h2>Demo video</h2>
+      <p class="small muted">65 s walkthrough: real SAP execution with DOM-target highlighting, then this console. Royalty-free soundtrack.</p>
+      <video class="demo" controls preload="none" playsinline poster="/static/demo-poster.jpg"><source src="/static/demo.mp4" type="video/mp4"><a href="/static/demo.mp4">Download the video</a></video>
+      <div class="row small"><a href="/static/demo.mp4" download>Download MP4</a><span class="muted">1920×1080 · 14 MB</span></div>
+    </section>
+  </div>`)
+  paintDocs()
+  $('#docForm').onsubmit = run(async (e) => {
+    e.preventDefault()
+    const f = $('#docFile').files[0]
+    if (!f) throw new Error('Pick a PDF')
+    if (f.size > 20 * 1024 * 1024) throw new Error('PDF is larger than 20 MB')
+    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = () => rej(new Error('Could not read the file')); r.readAsDataURL(f) })
+    const meta = await http('/admin/docs', { method: 'POST', body: { name: f.name, size: f.size } })
+    for (let i = 0; i < meta.chunks; i++) {
+      $('#docProg').textContent = `Uploading part ${i + 1} of ${meta.chunks}`
+      const res = await fetch(`/api/admin/docs/${meta.id}/${i}`, { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'text/plain' }, body: b64.slice(i * meta.chunkSize, (i + 1) * meta.chunkSize) })
+      if (!res.ok) { await http(`/admin/docs/${meta.id}`, { method: 'DELETE' }).catch(() => {}); throw new Error((await res.json().catch(() => ({}))).error || `Upload failed at part ${i + 1}`) }
+    }
+    $('#docProg').textContent = `${f.name} uploaded. Set the task pages below.`
+    $('#docFile').value = ''
+    toast('Task PDF uploaded')
+    paintDocs()
+  })
   const refresh = () => viewAdmin()
+  paintUsage()
   $('#reg').onchange = run(async (e) => { await http('/admin/settings', { method: 'POST', body: { registration: e.target.value } }); toast(`Registration ${e.target.value}`) })
   document.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', run(async () => { await http(`/admin/users/${b.dataset.u}`, { method: 'POST', body: { status: b.dataset.st } }); toast(`User ${b.dataset.st}`); refresh() })))
   document.querySelectorAll('[data-role]').forEach((s) => s.addEventListener('change', run(async () => { await http(`/admin/users/${s.dataset.role}`, { method: 'POST', body: { role: s.value } }); toast('Role updated') })))
   document.querySelectorAll('[data-grant]').forEach((c) => c.addEventListener('change', run(async () => { const uid = c.dataset.grant; const ids = [...document.querySelectorAll(`[data-grant="${uid}"]:checked`)].map((x) => Number(x.value)); await http(`/admin/users/${uid}`, { method: 'POST', body: { accounts: ids } }); toast('Grants saved') })))
-  $('#addAcc').onsubmit = run(async (e) => { e.preventDefault(); await http('/admin/accounts', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); refresh() })
+  $('#addAcc').onsubmit = run(async (e) => { e.preventDefault(); const r = await http('/admin/accounts', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); toast(`Allowlisted ${r.added.join(', ')}`); refresh() })
   document.querySelectorAll('[data-delacc]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Remove this SAP account and its grants?')) return; await http(`/admin/accounts/${b.dataset.delacc}`, { method: 'DELETE' }); refresh() })))
   $('#addRun').onsubmit = run(async (e) => {
     e.preventDefault()
@@ -552,6 +1007,19 @@ async function viewAdmin() {
     $('#cpTok').onclick = () => { navigator.clipboard?.writeText(r.token); toast('Token copied') }
   })
   document.querySelectorAll('[data-rev]').forEach((b) => b.addEventListener('click', run(async () => { if (!confirm('Revoke this runner token?')) return; await http(`/admin/runners/${b.dataset.rev}`, { method: 'DELETE' }); refresh() })))
+  document.querySelectorAll('[data-savelimit]').forEach((b) => b.addEventListener('click', run(async () => { const v = document.querySelector(`[data-limit="${b.dataset.savelimit}"]`).value; const r = await http(`/admin/runners/${b.dataset.savelimit}`, { method: 'PUT', body: { accounts: v } }); toast(r.accounts.length ? `Runner limited to ${r.accounts.join(', ')}` : 'Runner may drive all accounts'); refresh() })))
+}
+
+const meter = (label, used, cap) => { const pct = Math.min(100, Math.round((used / cap) * 1000) / 10); return `<div class="usage-row ${pct >= 100 ? 'full' : pct >= 80 ? 'high' : ''}"><div class="row" style="justify-content:space-between"><span>${label}</span><span class="mono">${used.toLocaleString()} / ${cap.toLocaleString()} · ${pct}%</span></div><div class="progress" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><i style="width:${pct}%"></i></div></div>` }
+async function paintUsage() {
+  if (!$('#usage-body')) return
+  const u = await http('/admin/usage').catch((e) => ({ error: e.message }))
+  const el = $('#usage-body'); if (!el) return
+  if (u.resetsAt) $('#usage-reset').textContent = `Resets ${new Date(u.resetsAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} your time (00:00 UTC)`
+  const hit = u.quota ? '<p class="pill err" style="width:fit-content">Limit reached today: saving resumes at 00:00 UTC</p>' : ''
+  if (u.total) { el.className = 'stack'; el.innerHTML = `${hit}${meter('Rows written (free plan: 100,000 per day)', u.total.rowsWritten, u.limits.rowsWritten)}${meter('Rows read (free plan: 5,000,000 per day)', u.total.rowsRead, u.limits.rowsRead)}<p class="small muted">Whole Cloudflare account (${u.databases.length} D1 ${u.databases.length === 1 ? 'database' : 'databases'} used today), from Cloudflare analytics (the same source as the dashboard). Updated every minute; analytics can lag a few minutes behind.</p>`; return }
+  el.className = 'stack small'
+  el.innerHTML = `${hit}${u.error ? `<p class="pill warn" style="width:fit-content">${esc(u.error)}</p>` : ''}<p class="muted">${u.configured ? 'Cloudflare analytics did not answer.' : 'Live numbers are off. Add two Cloudflare Pages secrets, <code>CF_ACCOUNT_ID</code> and <code>CF_ANALYTICS_TOKEN</code> (token permission: Account Analytics, Read), then redeploy. SETUP.md, section "Usage meter", has the steps.'} The same numbers are on dash.cloudflare.com under Storage &amp; databases, D1 SQL Database, Usage.</p>`
 }
 
 boot().catch((e) => { $('#app').innerHTML = `<div class="center"><div class="stack"><h1>Could not load</h1><p class="muted">${esc(e.message)}</p></div></div>` })

@@ -1,15 +1,21 @@
 import { chromium } from 'playwright'
 import { createHash } from 'node:crypto'
-import { readFileSync, existsSync } from 'node:fs'
-import { VIEW, webgui, fioriUrl, settle, captureDom, statusbar, popupText, login, gotoTxn, openFioriApp, captureVar, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups } from './sap.mjs'
+import { VIEW, webgui, fioriUrl, settle, captureDom, statusbar, popupText, login, gotoTxn, openFioriApp, captureVar, findByLabel, typeInto, clickButton, clickTab, selectNode, grids, resolveColumns, writeCell, readCell, clickMenu, handlePopups, clickTitle, selectTreeObject, expandProjectTree, treeRows, openProjectFromWorklist, clearOwnLocks, waitPopup, popupInput, recoverSession, projectBuilderWelcome, openProject } from './sap.mjs'
+import { RECIPES, saveProject } from './recipes.mjs'
+import { Checker } from './checks.mjs'
+import { loadEnv, localAccounts } from './env.mjs'
+import { VERSION } from './version.mjs'
+import { hostname, cpus, totalmem } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
-const VERSION = '1.1.0'
-if (existsSync(new URL('../.env', import.meta.url))) {
-  for (const line of readFileSync(new URL('../.env', import.meta.url), 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/)
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '')
-  }
-}
+const escRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const toRe = (v) => (v instanceof RegExp ? v : new RegExp(String(v), 'i'))
+const reviveArgs = (a = {}) => ({ ...a, flags: a.flags ? a.flags.map(toRe) : a.flags, checks: a.checks ? a.checks.map(toRe) : a.checks })
+
+loadEnv()
 
 const CONTROL = (process.env.CONTROL_URL || '').replace(/\/$/, '')
 const TOKEN = process.env.RUNNER_TOKEN || ''
@@ -17,21 +23,43 @@ const SAP_HOST = process.env.SAP_HOST || 'm53p.ucc.cloud'
 const SAP_HOST_FALLBACK = process.env.SAP_HOST_FALLBACK || 'm42p.ucc.cloud'
 const SAP_CLIENT = process.env.SAP_CLIENT || '236'
 const HEADLESS = process.env.HEADLESS !== 'false'
-const LOCAL = Object.fromEntries((process.env.SAP_ACCOUNTS || '').split(',').map((s) => s.trim()).filter(Boolean).map((s) => { const i = s.indexOf(':'); return i > 0 ? [s.slice(0, i).toUpperCase(), s.slice(i + 1)] : [s.toUpperCase(), ''] }))
+const LOCAL = localAccounts()
+const FIT_JOBS = Math.max(1, Math.floor((totalmem() / 1048576 - 500) / 450))
+const MAX_JOBS = Math.max(1, Math.min(8, /^\d+$/.test(process.env.MAX_JOBS || '') ? Number(process.env.MAX_JOBS) : FIT_JOBS))
+const ONLY = (process.env.ONLY_ACCOUNTS || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
 if (!CONTROL || !TOKEN) { process.stderr.write('Set CONTROL_URL and RUNNER_TOKEN in runner/.env\n'); process.exit(1) }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (...a) => process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${a.join(' ')}\n`)
 
+const QUOTA = { until: 0, warned: 0 }
+const quotaActive = () => QUOTA.until > Date.now()
+const QUOTA_RE = /exceeded D1's free tier daily row (write|read) limit|D1_(WRITE|READ)_LIMIT/i
+const nextUtcMidnight = () => { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) }
+const noteQuota = (retryAt) => {
+  QUOTA.until = Math.max(QUOTA.until, Number(retryAt) || nextUtcMidnight())
+  if (Date.now() - QUOTA.warned > 10 * 60 * 1000) { QUOTA.warned = Date.now(); log(`NOTE Cloudflare D1 free daily write limit reached. Reporting slows down until ${new Date(QUOTA.until).toISOString()}; SAP work continues and log lines are kept here until writes reopen`) }
+}
+
 async function call(path, body) {
-  const res = await fetch(`${CONTROL}/api/runner${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`, 'x-runner-version': VERSION }, body: JSON.stringify(body || {}) })
+  const res = await fetch(`${CONTROL}/api/runner${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`, 'x-runner-version': VERSION }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000) })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  if (!res.ok) {
+    const quota = /D1_(WRITE|READ)_LIMIT/.test(data.code || '') || QUOTA_RE.test(data.error || '')
+    if (quota) noteQuota(data.retryAt)
+    const e = new Error(data.error || `HTTP ${res.status}`); e.quota = quota; e.status = res.status
+    throw e
+  }
+  if (data.quota?.retryAt) noteQuota(data.quota.retryAt)
+  else if (data.stored === true && quotaActive()) { QUOTA.until = 0; log('NOTE D1 writes accepted again, normal reporting resumed') }
   return data
 }
 
 const ERR_RE = /(does not exist|not allowed|not authorized|keine Berechtigung|invalid|ungültig|is locked|gesperrt|error|fehler|not possible|cannot be|must be)/i
 const isErr = async (page) => page.evaluate(() => !!document.querySelector('[class*="MessageBar"][class*="rror"], [class*="sbar"] [class*="rror"], [class*="Msg"][class*="rror"] , [title="Error"], [aria-label="Error"]')).catch(() => false)
+
+const EVENT_CAP = 600
+const RETRYABLE = /Read-back differs|missing after Enter|already exists$|No free row for|Create button not found|Create > Project menu item not found|Project definition fields not found|Tree object .* not found|Clicked tree row but header|not open, title|Internal processing grid not found|Button .* not found|not in DOM|Target (page|closed)|Execution context was destroyed|Timeout \d+ms/i
 
 class Job {
   constructor(job, plan, browser) {
@@ -41,14 +69,22 @@ class Job {
     this.stepOnce = false; this.aborted = false; this.seq = 0; this.lastHash = ''; this.lastFrameAt = 0; this.activeAt = Date.now(); this.target = null
     this.ctx = { host: SAP_HOST, fallbackHost: SAP_HOST_FALLBACK, client: SAP_CLIENT, user: job.sapUser, password: job.password || LOCAL[job.sapUser] || '', entry: plan.entry || 'webgui', vars: {} }
     this.results = { ok: 0, failed: 0, manual: 0, skipped: 0 }
+    this.autoTries = {}
+    this.seen = new Set(); this.ack = []; this.watched = true
+    this.rctx = { page: null, vars: {}, dirty: false, sap: { host: SAP_HOST, client: SAP_CLIENT } }
   }
 
-  ev(level, message, stepKey, data) { this.events.push({ level, message, stepKey, data }); log(level.toUpperCase(), stepKey || '', message) }
+  ev(level, message, stepKey, data) {
+    this.events.push({ level, message, stepKey, data })
+    if (this.events.length > EVENT_CAP) { const i = this.events.findIndex((e) => e.level === 'info' || e.level === 'dom'); this.events.splice(i >= 0 ? i : 0, 1) }
+    log(level.toUpperCase(), stepKey || '', message)
+  }
 
   async start() {
     this.context = await this.browser.newContext({ viewport: VIEW, deviceScaleFactor: 1, locale: 'en-US', ignoreHTTPSErrors: false })
     this.page = await this.context.newPage()
     this.page.on('dialog', (d) => d.accept().catch(() => {}))
+    this.rctx.page = this.page
     this.alive = true
     this.syncLoop = this.loopSync()
     this.frameLoop = this.loopFrames()
@@ -65,17 +101,47 @@ class Job {
         else if (!r.ok) { this.ev('error', r.reason, 'login'); await this.handoff({ title: 'Login failed', instruction: `${r.reason}. Log in on the canvas or abort.`, error: r.reason }, 'login') }
         else this.ev('ok', `Logged in as ${this.ctx.user} on ${this.ctx.host} client ${SAP_CLIENT} (${this.ctx.entry})`, 'login', { statusbar: await statusbar(this.page) })
       }
+      this.secret = this.ctx.password
       this.ctx.password = ''
       while (this.idx < this.steps.length && !this.aborted) {
         await this.gate()
         if (this.aborted) break
-        const s = this.steps[this.idx]
+        let s = this.steps[this.idx]
+        if (this.waited) {
+          this.waited = false
+          const rc = await recoverSession(this.page, { ...this.ctx, password: this.secret }).catch(() => ({ ok: true, notes: [] }))
+          const back = this.reopenFor(s)
+          const proj = back != null ? this.steps[back].project : null
+          const moved = proj && !(await this.page.title().catch(() => '')).includes(proj)
+          if (rc.notes.length) this.ev('warn', rc.notes.join('. '), s.key)
+          if ((rc.notes.length || moved) && back != null && back < this.idx) {
+            this.ev('info', `Screen changed while paused; reopening ${proj} from step ${this.steps[back].key} before continuing`, s.key)
+            this.results.ok = Math.max(0, this.results.ok - (this.idx - back)); this.idx = back; s = this.steps[back]
+          }
+        }
         const out = await this.exec(s).catch((e) => ({ ok: false, reason: e.message }))
         if (this.aborted) break
         if (out.redo) continue
-        if (out.ok) { if (out.manual) this.results.manual++; else this.results.ok++; this.ev(out.warn ? 'warn' : 'ok', out.note || s.label || s.op, s.key, { statusbar: out.statusbar, readback: out.readback }); this.idx++ }
+        if (out.ok) {
+          if (out.manual) this.results.manual++; else this.results.ok++
+          this.ev(out.warn ? 'warn' : 'ok', out.note || s.label || s.op, s.key, { statusbar: out.statusbar, readback: out.readback }); this.idx++
+          if (out.skipTask) { let n = 0; while (this.idx < this.steps.length && this.steps[this.idx].task === s.task) { this.idx++; n++ } this.results.skipped += n; this.ev('info', `Task ${s.task}: already done in SAP, ${n} remaining step(s) skipped (no duplicate posting, no new screenshot)`, s.key) }
+        }
         else if (out.skipped) { this.results.skipped++; this.ev('warn', `Skipped: ${out.reason || s.label}`, s.key); this.idx++ }
+        else if (out.soft) { this.results.failed++; this.ev('error', out.reason, s.key); this.idx++ }
         else {
+          const tries = (this.autoTries[s.key] || 0)
+          if (tries < 3) {
+            const rc = await recoverSession(this.page, { ...this.ctx, password: this.secret }).catch(() => ({ ok: false, notes: [] }))
+            const again = rc.notes.length > 0 || tries === 0 || RETRYABLE.test(out.reason || '')
+            if (again && rc.ok !== false) {
+              this.autoTries[s.key] = tries + 1
+              this.ev('warn', `${out.reason || 'Step failed'}. ${rc.notes.join('. ') || `Reopening and retrying automatically (${tries + 1} of 3)`}`, s.key)
+              const back = this.reopenFor(s)
+              if (back != null) { this.results.ok = Math.max(0, this.results.ok - (this.idx - back)); this.idx = back }
+              continue
+            }
+          }
           this.ev('error', out.reason || 'Step failed', s.key, { statusbar: await statusbar(this.page), popup: await popupText(this.page) })
           const d = await this.handoff({ title: `Step ${s.key} needs you`, instruction: `${s.label}. Automation could not finish this. Fix it on the canvas and press Done, or retry.`, error: out.reason, values: s.values || valuesOf(s, this.ctx.vars) }, s.key)
           if (d === 'retry') continue
@@ -84,7 +150,9 @@ class Job {
         }
         if (this.stepOnce) { this.paused = true; this.stepOnce = false }
       }
-      const summary = `${this.results.ok} verified, ${this.results.manual} by operator, ${this.results.skipped} skipped`
+      const ev = this.steps.filter((x) => x.evidenceOnly).length
+      const passed = Math.max(0, this.results.ok - this.steps.slice(0, this.idx).filter((x) => x.evidenceOnly).length)
+      const summary = this.plan.validate ? `${passed} of ${this.steps.length - ev} checkable tasks pass in SAP${this.results.failed ? `, ${this.results.failed} not complete` : ''}${ev ? `; ${ev} screenshot task(s) to check by eye` : ''}` : `${this.results.ok} verified, ${this.results.manual} by operator, ${this.results.skipped} skipped`
       await this.flush(this.aborted ? 'aborted' : 'done', { result: { ...this.results, summary } })
       this.ev('info', `Finished: ${summary}`)
     } catch (e) {
@@ -94,44 +162,70 @@ class Job {
       this.alive = false
       await sleep(1200)
       await this.pushFrame(true).catch(() => {})
-      await this.flush(this.aborted ? 'aborted' : this.status === 'failed' ? 'failed' : 'done').catch(() => {})
+      const end = this.aborted ? 'aborted' : this.status === 'failed' ? 'failed' : 'done'
+      for (let i = 0; i < 4; i++) { const ok = await this.flush(end).catch(() => false); if (ok && !this.events.length) break; await sleep(quotaActive() ? 15000 : 2000) }
+      if (this.events.length) log(`NOTE ${this.events.length} log line(s) for job #${this.job.id} could not be stored on the site (D1 limit); they are in this journal`)
       await this.context.close().catch(() => {})
     }
   }
 
   async flush(status, extra = {}) {
     if (status) this.status = status
-    const events = this.events.splice(0, 50)
-    const r = await call(`/jobs/${this.job.id}/state`, { status: this.status, stepIdx: this.idx, prompt: this.prompt, events, ...extra }).catch((e) => { this.events.unshift(...events); log('WARN sync', e.message); return { commands: [] } })
-    for (const c of r.commands || []) await this.onCommand(c)
+    while (this.flushing) await this.flushing.catch(() => {})
+    this.flushing = this.flushNow(extra)
+    try { return await this.flushing } finally { this.flushing = null }
   }
 
-  async loopSync() { while (this.alive) { await this.flush().catch(() => {}); await sleep(this.prompt || this.paused ? 700 : 1000) } }
+  async flushNow(extra) {
+    const events = this.events.splice(0, 50)
+    const ack = this.ack.splice(0)
+    const back = () => { this.events.unshift(...events); this.ack.unshift(...ack) }
+    const r = await call(`/jobs/${this.job.id}/state`, { status: this.status, stepIdx: this.idx, prompt: this.prompt, events, ack, ...extra }).catch((e) => { back(); if (!e.quota) log('WARN sync', e.message); return { commands: [], failed: true } })
+    if (r.stored === false) back()
+    if (typeof r.watched === 'boolean') this.watched = r.watched
+    for (const c of r.commands || []) {
+      if (!this.ack.includes(c.id)) this.ack.push(c.id)
+      if (this.seen.has(c.id)) continue
+      this.seen.add(c.id)
+      await this.onCommand(c)
+    }
+    return !r.failed && r.stored !== false
+  }
+
+  async loopSync() {
+    while (this.alive) {
+      await this.flush().catch(() => {})
+      const busy = this.prompt || this.paused || Date.now() - this.activeAt < 15000
+      await sleep(quotaActive() ? (busy ? 2500 : 6000) : busy ? 700 : this.watched ? 1000 : 2500)
+    }
+  }
 
   async loopFrames() {
     while (this.alive) {
       const fast = Date.now() - this.activeAt < 8000
-      await this.pushFrame().catch(() => {})
-      await sleep(fast ? 450 : 1500)
+      if (this.watched || fast) await this.pushFrame().catch(() => {})
+      await sleep(!this.watched && !fast ? 4000 : quotaActive() ? 3000 : fast ? 450 : 1500)
     }
   }
 
   async pushFrame(force = false) {
     if (!this.page || this.page.isClosed()) return
-    const buf = await this.page.screenshot({ type: 'jpeg', quality: 55, timeout: 8000 }).catch(() => null)
+    const buf = await this.snap(55).catch(() => null)
     if (!buf) return
     const hash = createHash('sha1').update(buf).digest('hex')
     if (!force && hash === this.lastHash && Date.now() - this.lastFrameAt < 10000) return
     this.lastHash = hash; this.lastFrameAt = Date.now()
     const dom = await captureDom(this.page, this.target).catch(() => null)
-    await call(`/jobs/${this.job.id}/frame`, { seq: ++this.seq, width: VIEW.width, height: VIEW.height, image: buf.toString('base64'), dom, url: this.page.url(), title: await this.page.title().catch(() => ''), statusbar: await statusbar(this.page) })
+    const r = await call(`/jobs/${this.job.id}/frame`, { seq: ++this.seq, final: force || undefined, width: VIEW.width, height: VIEW.height, image: buf.toString('base64'), dom, url: this.page.url(), title: await this.page.title().catch(() => ''), statusbar: await statusbar(this.page) }).catch((e) => { this.lastHash = ''; throw e })
+    if (typeof r?.watched === 'boolean') this.watched = r.watched
+    if (r?.stored === false) this.lastHash = ''
   }
 
   async onCommand(c) {
     const p = this.page
     this.activeAt = Date.now()
     const input = ['click', 'dblclick', 'type', 'key', 'scroll', 'goto', 'fill'].includes(c.type)
-    if (input && this.job.mode === 'observe') return
+    if (input && ['observe', 'validate'].includes(this.job.mode)) return
     if (input && !this.prompt && !this.paused) { this.paused = true; this.ev('info', 'Operator took control, automation paused') }
     try {
       if (c.type === 'click') await p.mouse.click(c.x, c.y)
@@ -149,6 +243,11 @@ class Job {
     } catch (e) { this.ev('warn', `Command ${c.type} failed: ${e.message}`) }
   }
 
+  reopenFor(s) {
+    for (let i = this.idx - 1; i >= 0 && this.steps[i].task === s.task; i--) if (this.steps[i].op === 'openProject') return i
+    return null
+  }
+
   decide(d) { const r = this.resolver; this.resolver = null; this.prompt = null; if (r) r(d) }
 
   async handoff(prompt, stepKey) {
@@ -157,6 +256,7 @@ class Job {
     await this.flush('waiting')
     const d = await new Promise((r) => { this.resolver = r })
     this.paused = false
+    this.waited = true
     await this.flush('running')
     return d
   }
@@ -165,11 +265,21 @@ class Job {
     if (!this.paused) return
     await this.flush('paused')
     while (this.paused && !this.aborted) await sleep(300)
+    this.waited = true
     if (!this.aborted) await this.flush('running')
   }
 
+  async snap(quality = 82) {
+    const fast = this.rctx.vars.fastShot
+    const buf = await this.page.screenshot({ type: 'jpeg', quality, timeout: fast ? 8000 : 30000, animations: 'disabled' }).catch(() => null)
+    if (buf) return buf
+    const cdp = await this.page.context().newCDPSession(this.page)
+    const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality }).finally(() => cdp.detach().catch(() => {}))
+    return Buffer.from(r.data, 'base64')
+  }
+
   async evidence(name, caption, task) {
-    const buf = await this.page.screenshot({ type: 'jpeg', quality: 82 })
+    const buf = await this.snap(82)
     await call(`/jobs/${this.job.id}/evidence`, { name, caption, task, kind: 'screenshot', mime: 'image/jpeg', body: buf.toString('base64') })
     const dom = await captureDom(this.page)
     const sb = await statusbar(this.page)
@@ -177,7 +287,7 @@ class Job {
     this.ev('ok', `Evidence captured: ${caption}`, null)
   }
 
-  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'fioriApp', 'captureVar', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss'].includes(s.op) }
+  observeBlocked(s) { return this.job.mode === 'observe' && !['txn', 'fioriApp', 'captureVar', 'openProject', 'overview', 'tab', 'shot', 'expectText', 'expect', 'expectField', 'node', 'dismiss', 'popupField'].includes(s.op) && !(s.op === 'recipe' && ['treeSelect', 'costReport', 'networkGraph'].includes(s.name)) }
 
   async verify(note, extra = {}) {
     const sb = await statusbar(this.page)
@@ -190,6 +300,7 @@ class Job {
     const sub = (v) => subst(v, this.ctx.vars)
     this.target = null
     if (this.observeBlocked(s)) return { skipped: true, reason: `${s.label} (observe mode is read-only)` }
+    if (s.op === 'validate') return this.validateTask(s)
     if (s.op === 'manual') {
       if (s.optional && this.job.mode === 'auto') return { skipped: true, reason: `${s.label} is optional` }
       const dcs = await this.handoff({ title: s.label, instruction: sub(s.instruction || ''), values: s.values ? Object.fromEntries(Object.entries(s.values).map(([k, v]) => [k, sub(v)])) : undefined }, s.key)
@@ -197,7 +308,8 @@ class Job {
       if (dcs === 'retry') return { redo: true }
       return { ok: true, warn: true, manual: true, note: `${s.label}: done by operator`, statusbar: await statusbar(p) }
     }
-    if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); return r.ok ? { ok: true, note: `${s.code} open`, statusbar: r.statusbar } : r }
+    if (s.op !== 'shot') this.rctx.vars.fastShot = false
+    if (s.op === 'txn') { const r = await gotoTxn(p, this.ctx, s.code); if (!r.ok) return r; const w = s.code === 'CJ20N' ? await projectBuilderWelcome(p) : []; return { ok: true, note: `${s.code} open${w.length ? ` (${w.join('; ')})` : ''}`, statusbar: r.statusbar } }
     if (s.op === 'fioriApp') { const r = await openFioriApp(p, this.ctx, sub(s.app || ''), sub(s.hash || '')); return r.ok ? { ok: true, note: r.note, statusbar: r.statusbar } : r }
     if (s.op === 'click') { const hit = await clickButton(p, s.names.map((n) => (n instanceof RegExp ? n : sub(n)))); return hit ? { ok: true, note: `Clicked ${hit.t}` } : (s.optional ? { ok: true, note: `Button ${s.names[0]} not present` } : { ok: false, reason: `Button ${s.names.join(' / ')} not found` }) }
     if (s.op === 'captureVar') {
@@ -207,46 +319,59 @@ class Job {
       return { ok: true, note: `Captured ${s.varName} = ${val}`, readback: val }
     }
     if (s.op === 'dismiss') { const r = await handlePopups(p, (s.buttons || []).map((b) => new RegExp(`^${b}$`, 'i'))); return { ok: true, note: r ? `Popup handled: ${r.clicked || 'left open'}` : 'No popup' } }
-    if (s.op === 'key') { await p.keyboard.press(s.key); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.key} pressed`) }
+    if (s.op === 'key') { await p.keyboard.press(s.press); await settle(p, 900); await handlePopups(p, [/^Yes$/i, /^Continue$/i, /^OK$/i]); return this.verify(`${s.press} pressed`) }
     if (s.op === 'tab') { const t = await clickTab(p, s.names); if (!t) return s.optional ? { ok: true, note: 'Tab not present, continuing' } : { ok: false, reason: `Tab ${s.names.join(' / ')} not found` }; return { ok: true, note: `Tab ${t.t}` } }
     if (s.op === 'shot') { await settle(p, 500); await this.evidence(s.name, s.caption, s.task); return { ok: true, note: `Screenshot ${s.name}` } }
-    if (s.op === 'save') {
-      await p.keyboard.press('Control+S'); await settle(p, 2000)
-      for (let i = 0; i < 3; i++) { const h = await handlePopups(p, [/^Yes$/i, /^Ja$/i, /^Save$/i, /^Continue$/i, /^OK$/i]); if (!h) break; await settle(p, 1200) }
-      const sb = await statusbar(p)
-      if (new RegExp(s.expect || 'saved', 'i').test(sb)) return { ok: true, note: `Saved: ${sb}`, statusbar: sb }
-      if (/no changes|keine Änderungen|data not changed|Daten wurden nicht/i.test(sb)) return { ok: false, reason: `SAP says nothing changed: ${sb}. The entries were not committed.` }
-      return { ok: false, reason: `Save not confirmed. Status bar: "${sb || 'empty'}"` }
+    if (s.op === 'save') return saveProject(this.rctx, s)
+    if (s.op === 'recipe') {
+      const fn = RECIPES[s.name]
+      if (!fn) return { ok: false, reason: `Unknown recipe ${s.name}` }
+      const r = await fn(this.rctx, reviveArgs(s.args))
+      return r.ok ? { ...r, statusbar: r.statusbar || await statusbar(p) } : r
     }
     if (s.op === 'openProject') {
       const r = await gotoTxn(p, this.ctx, 'CJ20N'); if (!r.ok) return r
+      await projectBuilderWelcome(p)
       await handlePopups(p, [/^Continue$/i, /^Cancel$/i])
-      let hit = await selectNode(p, [s.project], true)
-      if (!hit) {
-        const open = await clickButton(p, [/^Open$/i, /Open project/i, /Öffnen/i])
-        if (open) { const f = await findByLabel(p, [/Project def/i, /Project Definition/i]); if (f) { await typeInto(p, f, s.project); await p.keyboard.press('Enter'); await settle(p, 2500); hit = s.project } }
-      }
+      const hit = (await openProject(p, s.project)) ? s.project : null
       if (!hit) return { ok: false, reason: `Could not open ${s.project} from the worklist or Open dialog` }
+      await settle(p, 2500)
+      if (/not all objects were locked|locked by|is currently being processed/i.test(await statusbar(p)) || /Display (project|network)/i.test(await p.title())) {
+        this.lockTries = (this.lockTries || 0) + 1
+        if (this.lockTries > 2) return { ok: false, reason: `${s.project} opens in display mode: still locked after releasing stale locks twice` }
+        const lk = await clearOwnLocks(p, this.ctx)
+        this.ev(lk.ok ? 'warn' : 'error', lk.ok ? `Released ${lk.cleared} stale SAP lock(s) of ${this.ctx.user} left by an earlier session` : `Project locked: ${lk.reason}`, s.key)
+        if (!lk.ok) return { ok: false, reason: `${s.project} is locked and the lock could not be released: ${lk.reason}` }
+        return { redo: true }
+      }
+      this.lockTries = 0
       const title = await p.title()
-      const body = await p.evaluate(() => document.body.innerText.slice(0, 3000))
-      return body.includes(s.project) ? { ok: true, note: `${s.project} open`, readback: title } : { ok: false, reason: `${s.project} not visible after open` }
+      if (!title.includes(s.project)) return { ok: false, reason: `${s.project} not open, title is "${title}"` }
+      this.rctx.vars.project = s.project
+      await expandProjectTree(p)
+      const net = (await treeRows(p)).map((r) => r.ident.match(/^(\d{5,})$/)).find(Boolean)
+      if (net) this.rctx.vars.network = net[1]; else delete this.rctx.vars.network
+      this.rctx.dirty = false
+      return { ok: true, note: `${s.project} open${net ? `, network ${net[1]}` : ''}`, readback: title }
     }
     if (s.op === 'node') { const t = await selectNode(p, s.text); return t ? { ok: true, note: `Selected ${t}` } : { ok: false, reason: `Tree node ${s.text.join(' / ')} not found` } }
     if (s.op === 'overview') {
-      const t = await selectNode(p, [s.node])
-      if (!t) return { ok: false, reason: `Tree node ${s.node} not found` }
-      const b = await clickButton(p, s.button)
+      const sel = /^\d{4}$/.test(s.node) ? { act: s.node } : { ident: s.node, level: s.level ?? 1 }
+      const t = await selectTreeObject(p, sel)
+      if (!t.ok) return t
+      if (t.network) this.rctx.vars.network = t.network
+      const b = await clickTitle(p, s.button) || await clickButton(p, s.button)
       if (!b) return { ok: false, reason: `Button ${s.button.join(' / ')} not found` }
-      return { ok: true, note: `${b.t} on ${s.node}` }
+      return { ok: true, note: `${b.t} on ${t.header.join(' / ')}` }
     }
     if (s.op === 'menu') { const r = await clickMenu(p, s.path); if (!r.ok) return r; await handlePopups(p); return this.verify(`Menu ${s.path.join(' > ')}`) }
     if (s.op === 'expect') { const sb = await statusbar(p); return new RegExp(s.statusbar, 'i').test(sb) ? { ok: true, note: `Status bar: ${sb}`, statusbar: sb } : { ok: false, reason: `Expected status /${s.statusbar}/, got "${sb}"` } }
-    if (s.op === 'expectText') { await settle(p, 800); const found = await p.evaluate((t) => document.body.innerText.includes(t), s.text); return found ? { ok: true, note: `Found ${s.text}`, readback: s.text } : { ok: false, reason: `Value ${s.text} not on screen. Verify the report manually.` } }
-    if (s.op === 'expectField') { const f = await findByLabel(p, s.titles); if (!f) return { ok: false, reason: `Field ${s.titles[0]} not found` }; const v = (f.v || '').replace(/[^\d.,]/g, ''); return parseFloat(v.replace(',', '.')) === Number(s.value) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected ${s.value}` } }
+    if (s.op === 'expectText') { await settle(p, 800); const found = await p.evaluate((t) => (document.body?.innerText || '').includes(t), s.text); return found ? { ok: true, note: `Found ${s.text}`, readback: s.text } : { ok: false, reason: `Value ${s.text} not on screen. Verify the report manually.` } }
+    if (s.op === 'expectField') { const f = await findByLabel(p, s.titles); if (!f) return { ok: false, reason: `Field ${s.titles[0]} not found` }; if (s.contains) return String(f.v).includes(s.contains) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected to contain ${s.contains}` }; const v = (f.v || '').replace(/[^\d.,]/g, ''); return parseFloat(v.replace(/,/g, '')) === Number(s.value) ? { ok: true, note: `${f.t} = ${f.v}`, readback: f.v } : { ok: false, reason: `${f.t} is "${f.v}", expected ${s.value}` } }
     if (s.op === 'popupField') {
-      const txt = await popupText(p)
+      const txt = await waitPopup(p, new RegExp(s.titles.map(escRe).join('|'), 'i'), s.wait || 8000) || await popupText(p)
       if (!txt) return s.optional ? { ok: true, note: 'No popup, value not required' } : { ok: false, reason: 'Popup not shown' }
-      const f = await findByLabel(p, s.titles)
+      const f = await findByLabel(p, s.titles) || (new RegExp(s.titles.map(escRe).join('|'), 'i').test(txt) ? await popupInput(p) : null)
       if (!f) return s.optional ? { ok: true, warn: true, note: `Popup "${txt.slice(0, 60)}" without ${s.titles[0]}` } : { ok: false, reason: `${s.titles[0]} not in popup` }
       await typeInto(p, f, s.value); await p.keyboard.press('Enter'); await settle(p, 1200)
       return this.verify(`${s.titles[0]} = ${s.value}`)
@@ -272,8 +397,18 @@ class Job {
       if (hit.v !== 'true') { await p.mouse.click(hit.x + 6, hit.y + hit.h / 2); await settle(p, 300) }
       return { ok: true, note: `${s.titles[0]} ticked` }
     }
-    if (s.op === 'grid') return this.gridOp(s)
+    if (s.op === 'grid') { const r = await this.gridOp(s); if (r.ok) this.rctx.dirty = true; return r }
     return { ok: false, reason: `Unknown op ${s.op}` }
+  }
+
+  async validateTask(s) {
+    if (s.evidenceOnly || !s.checks.length) return { ok: true, warn: true, note: `Task ${s.task}: screenshot task, check the evidence image by eye`, readback: 'evidence only' }
+    this.checker = this.checker || new Checker(this.page, this.ctx, this.plan.data)
+    const res = await this.checker.run(s.checks)
+    const detail = res.map((r) => `${r.ok ? 'PASS' : 'FAIL'} ${r.check}: ${r.detail}`).join(' | ')
+    if (s.checks.some((c) => ['labor', 'invoice', 'finalActual', 'reportRuns', 'plan8000'].includes(c)) && !this.reportShot) { this.reportShot = true; await this.evidence('v-report', 'Validate: cost report as read', s.task).catch(() => {}) }
+    if (res.length && res.every((r) => r.ok)) return { ok: true, note: `Task ${s.task} verified in SAP: ${detail}`, readback: detail }
+    return { ok: false, soft: true, reason: `Task ${s.task} not complete in SAP: ${detail || 'no result'}` }
   }
 
   async gridOp(s) {
@@ -357,17 +492,67 @@ const valuesOf = (s, vars = {}) => {
   return undefined
 }
 
+const STARTED = Date.now()
+const RUNNER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO_DIR = join(RUNNER_DIR, '..')
+const SUPERVISED = !!(process.env.INVOCATION_ID || process.env.pm_id || process.env.RUNNER_SUPERVISED)
+const AUTO_UPDATE = process.env.AUTO_UPDATE !== 'false'
+const newer = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0) } return false }
+let updateTriedAt = 0
+
+function selfUpdate(latest) {
+  if (!AUTO_UPDATE || !newer(latest, VERSION) || Date.now() - updateTriedAt < 30 * 60 * 1000) return false
+  updateTriedAt = Date.now()
+  if (!existsSync(join(REPO_DIR, '.git'))) { log(`NOTE runner ${latest} is available; this copy is not a git checkout, update it by hand`); return false }
+  try {
+    const lock = () => { try { return readFileSync(join(RUNNER_DIR, 'package-lock.json'), 'utf8') } catch { return '' } }
+    const before = lock()
+    log(`Updating runner ${VERSION} -> ${latest}: git pull`)
+    execFileSync('git', ['-C', REPO_DIR, 'pull', '--ff-only'], { stdio: 'inherit', timeout: 120000 })
+    if (lock() !== before) execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: RUNNER_DIR, stdio: 'inherit', timeout: 600000 })
+    const now = (readFileSync(join(RUNNER_DIR, 'src', 'version.mjs'), 'utf8').match(/'([\d.]+)'/) || [])[1]
+    if (now === VERSION) { log('Update pulled nothing new; staying on', VERSION); return false }
+    if (!SUPERVISED) { log(`Runner ${now} downloaded. Restart this process (npm start) to use it.`); return false }
+    log(`Runner ${now} installed, restarting`)
+    return true
+  } catch (e) { log('WARN auto-update failed:', e.message); return false }
+}
+
 async function main() {
-  log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'}`)
-  const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage'] })
+  log(`Runner ${VERSION} → ${CONTROL} · SAP ${SAP_HOST}/${SAP_CLIENT} · local accounts: ${Object.keys(LOCAL).join(', ') || 'none'} · ${HEADLESS ? 'headless' : 'headed'} · ${MAX_JOBS} parallel job(s)`)
+  if (MAX_JOBS > FIT_JOBS) log(`NOTE MAX_JOBS=${MAX_JOBS} but this machine has memory for about ${FIT_JOBS}; SAP tabs may crash`)
+  const browser = await chromium.launch({ headless: HEADLESS, args: ['--disable-dev-shm-usage', '--disable-gpu', ...(totalmem() < 1.6e9 ? ['--js-flags=--max-old-space-size=384', ...(MAX_JOBS === 1 ? ['--renderer-process-limit=1'] : [])] : [])] })
+  const hello = async () => {
+    let sap = null
+    try { const t = Date.now(); const r = await fetch(webgui(SAP_HOST, SAP_CLIENT), { redirect: 'manual', signal: AbortSignal.timeout(15000) }); sap = { ok: r.status < 500, status: r.status, ms: Date.now() - t } } catch (e) { sap = { ok: false, error: e.message } }
+    const info = { version: VERSION, host: hostname(), platform: `${process.platform}/${process.arch}`, node: process.version, cpus: cpus().length, memMb: Math.round(totalmem() / 1048576), chromium: browser.version(), headless: HEADLESS, accounts: Object.keys(LOCAL), accountsWithPassword: Object.entries(LOCAL).filter(([, p]) => p).map(([u]) => u), sapHost: SAP_HOST, sapClient: SAP_CLIENT, sap, startedAt: STARTED, maxJobs: MAX_JOBS, only: ONLY }
+    const r = await call('/hello', { info }).catch((e) => { if (!e.quota) log('WARN hello', e.message); return null })
+    if (r?.latest && r.latest !== VERSION && !hello.warned) { hello.warned = true; log(`NOTE site expects runner ${r.latest}, this is ${VERSION}${AUTO_UPDATE ? '; will update itself when idle' : '. git pull && npm install'}`) }
+    hello.latest = r?.latest || hello.latest
+  }
+  await hello()
+  setInterval(hello, 5 * 60 * 1000)
   let idle = 0
+  const active = new Map()
+  const jobIds = new Map()
   for (;;) {
     try {
-      const r = await call('/claim', { accounts: Object.keys(LOCAL) })
-      if (r.job) { idle = 0; log(`Job #${r.job.id} ${r.job.sapUser} tasks ${r.job.tasks.join(',')} (${r.plan.steps.length} steps)`); await new Job(r.job, r.plan, browser).start(); continue }
-      if (++idle % 60 === 1) log('Waiting for jobs')
-    } catch (e) { log('WARN', e.message) }
-    await sleep(3000)
+      if (active.size < MAX_JOBS) {
+        const r = await call('/claim', { accounts: Object.keys(LOCAL), only: ONLY, busy: [...active.keys()], active: [...jobIds.values()] })
+        if (r.job) {
+          idle = 0
+          log(`Job #${r.job.id} ${r.job.sapUser} tasks ${r.job.tasks.join(',')} (${r.plan.steps.length} steps), slot ${active.size + 1}/${MAX_JOBS}`)
+          jobIds.set(r.job.sapUser, r.job.id)
+          const run = new Job(r.job, r.plan, browser).start().catch((e) => log('ERROR job', r.job.id, e.message)).finally(() => { active.delete(r.job.sapUser); jobIds.delete(r.job.sapUser) })
+          active.set(r.job.sapUser, run)
+          if (MAX_JOBS === 1) await run
+          continue
+        }
+        if (++idle % 60 === 1) log(`Waiting for jobs${ONLY.length ? ` (only ${ONLY.join(', ')})` : ''}`)
+      }
+    } catch (e) { if (!e.quota) log('WARN', e.message) }
+    if (!active.size && hello.latest && selfUpdate(hello.latest)) { await browser.close().catch(() => {}); process.exit(0) }
+    await sleep(quotaActive() && !active.size ? 30000 : idle > 20 ? 5000 : 3000)
   }
 }
 

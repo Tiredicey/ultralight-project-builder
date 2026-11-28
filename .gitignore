@@ -9,3 +9,7 @@ runner/.env
 logs/
 *.log
 .DS_Store
+runner/validation/*.png
+.work/
+.browsers/
+*.docx

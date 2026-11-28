@@ -37,36 +37,54 @@ export const suffixOf = (sapUser) => {
 export const RELATIONSHIPS = pt1.RELATIONSHIPS
 export const ACTIVITIES = pt1.ACTIVITIES
 export const WBS = pt1.WBS
+export const PREDECESSORS = pt1.PREDECESSORS
+export const FLAG_PATTERNS = pt1.FLAG_PATTERNS
 export const MILESTONES = pt1.MILESTONES
 export const TASKS = pt1.TASKS
+export const CHECKS = pt1.CHECKS
+
 export const dataFor = (sfx, packId = DEFAULT_PACK_ID) => getPack(packId).dataFor(sfx)
 
 export const planFor = (sapUser, taskIds, packId = DEFAULT_PACK_ID) => {
   const sfx = suffixOf(sapUser)
-  if (!sfx) throw new Error('SAP user must look like LEARN-###')
+  if (!sfx) throw new Error(`Invalid SAP user ${sapUser} (expected LEARN-###)`)
   const pack = getPack(packId)
   const d = pack.dataFor(sfx)
-  const ids = (taskIds && taskIds.length ? taskIds : pack.TASKS.map((t) => t.id)).map(Number)
-  const steps = []
-  for (const t of pack.TASKS.filter((t) => ids.includes(t.id))) {
-    t.steps(d).forEach((s, i) => steps.push({
-      ...s,
-      label: s.label || (s.op === 'shot' ? `Screenshot: ${s.caption}` : s.op),
-      task: t.id,
-      idx: steps.length,
-      key: `${t.id}.${i + 1}`
-    }))
-  }
+  const wanted = taskIds?.length ? new Set(taskIds.map(Number)) : null
+  const tasks = pack.TASKS.filter((t) => !wanted || wanted.has(t.id)).map((t) => ({
+    id: t.id, title: t.title, role: t.role, area: t.area, txn: t.txn, shot: t.shot,
+    steps: t.steps(d).map((s, i) => ({ key: `${t.id}.${i + 1}`, task: t.id, ...s }))
+  }))
   return {
     packId: pack.PACK_META.id,
     pack: pack.PACK_META,
-    entry: pack.PACK_META.entry || 'webgui',
+    sapUser: sapUser.toUpperCase(),
     data: d,
-    steps
+    tasks,
+    steps: tasks.flatMap((t) => t.steps)
   }
 }
 
-export const taskList = (packId = DEFAULT_PACK_ID) =>
+export const taskSummary = (packId = DEFAULT_PACK_ID) =>
   getPack(packId).TASKS.map(({ id, title, role, area, txn, shot }) => ({ id, title, role, area, txn, shot }))
 
-export const taskSummary = taskList
+export const taskSheet = (sapUser, packId = DEFAULT_PACK_ID) => {
+  const pack = getPack(packId)
+  if (typeof pack.taskSheet === 'function') return pack.taskSheet(sapUser)
+  const plan = planFor(sapUser, null, pack.PACK_META.id)
+  return {
+    sapUser: plan.sapUser,
+    packId: pack.PACK_META.id,
+    data: plan.data,
+    tasks: plan.tasks.map((t) => ({
+      id: t.id, title: t.title, role: t.role, area: t.area, txn: t.txn, shot: t.shot,
+      values: [], check: ''
+    }))
+  }
+}
+
+export const validatePlan = (sapUser, taskIds, packId = DEFAULT_PACK_ID) => {
+  const pack = getPack(packId)
+  if (typeof pack.validatePlan === 'function') return pack.validatePlan(sapUser, taskIds)
+  return planFor(sapUser, taskIds, pack.PACK_META.id)
+}
