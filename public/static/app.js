@@ -9,7 +9,7 @@ const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '')
 const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 const ago = (t) => { if (!t) return 'never'; const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago` }
 
-const S = { user: null, view: 'launch', pack: null, accounts: [], runnersOnline: 0, jobs: [], job: null, events: [], evidence: [], plan: null, frame: null, frameSeq: -1, lastEvent: 0, overlay: true, timers: [], admin: null, health: null, selTasks: new Set(), selAccount: '', mode: 'assist', typeBuf: '', hot: null }
+const S = { user: null, view: 'launch', pack: null, packId: 'it2406_pt1', accounts: [], runnersOnline: 0, jobs: [], job: null, events: [], evidence: [], plan: null, frame: null, frameSeq: -1, lastEvent: 0, overlay: true, timers: [], admin: null, health: null, selTasks: new Set(), selAccount: '', mode: 'assist', typeBuf: '', hot: null }
 
 async function http(path, opts = {}) {
   const res = await fetch(`/api${path}`, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined })
@@ -251,16 +251,26 @@ function go(view, arg) {
 async function viewLaunch() {
   const v = $('#view')
   v.innerHTML = stateHtml('Loading the task pack')
-  const [pack, acc] = await Promise.all([S.pack || http('/pack'), http('/me/accounts')])
-  S.pack = pack; S.accounts = acc.accounts; S.runnersOnline = acc.runnersOnline
+  let pack, acc
+  try {
+    ;[pack, acc] = await Promise.all([http(`/pack?packId=${encodeURIComponent(S.packId || '')}`), http('/me/accounts')])
+  } catch {
+    v.innerHTML = '<div class="card"><h3>Unable to load lab packs. Refresh the page.</h3></div>'
+    return
+  }
+  S.pack = pack; S.packId = pack.packId || S.packId; S.accounts = acc.accounts; S.runnersOnline = acc.runnersOnline
+  const activePack = (pack.packs || []).find((p) => p.id === S.packId) || { code: 'IT2406', title: 'SAP S/4HANA Pack', entry: 'webgui', description: '' }
   if (!S.selAccount && S.accounts[0]) S.selAccount = S.accounts[0].sap_user
+  const validIds = new Set(pack.tasks.map((t) => t.id))
+  S.selTasks = new Set([...S.selTasks].filter((id) => validIds.has(id)))
   if (!S.selTasks.size) pack.tasks.forEach((t) => S.selTasks.add(t.id))
   const a = S.accounts.find((x) => x.sap_user === S.selAccount)
   v.innerHTML = `
-  ${hero('launch', { title: 'Run the <span class="grad">PS and FI</span> pack', text: `Pick an allowlisted SAP account in client ${esc(pack.client)}, choose tasks, then watch and steer on the live canvas. One run per SAP user at a time, because WebGUI allows one dialog session.`, meta: `<span class="pill ${S.runnersOnline ? 'ok' : 'err'}"><i class="live-dot"></i>${S.runnersOnline ? `${S.runnersOnline} runner online` : 'No runner online'}</span><span class="pill">${pack.tasks.length} tasks</span><span class="pill">${S.accounts.length} account${S.accounts.length === 1 ? '' : 's'}</span>` })}
+  ${hero('launch', { title: `Run <span class="grad">${esc(activePack.code || 'SAP')}</span> pack`, text: esc(activePack.description || `Pick an allowlisted SAP account in client ${pack.client}, choose tasks, then watch and steer on the live canvas. One run per SAP user at a time, because WebGUI allows one dialog session.`), meta: `<span class="pill ${S.runnersOnline ? 'ok' : 'err'}"><i class="live-dot"></i>${S.runnersOnline ? `${S.runnersOnline} runner online` : 'No runner online'}</span><span class="pill">${pack.tasks.length} tasks</span><span class="pill">${S.accounts.length} account${S.accounts.length === 1 ? '' : 's'}</span>` })}
   ${S.accounts.length ? '' : `<div class="card" style="margin-bottom:1rem"><h3>No SAP account granted yet</h3><p class="muted small">${S.user.role === 'owner' ? 'Add LEARN-### accounts in the Owner console, then grant them.' : 'Ask the owner to grant you a LEARN-### account.'}</p></div>`}
   <form class="launch" id="launch">
     <section class="card stack">
+      <div class="field"><label for="packSel">Lab pack</label><select class="input" id="packSel">${(pack.packs || []).map((p) => `<option value="${esc(p.id)}" ${p.id === S.packId ? 'selected' : ''}>${esc(p.code)} · ${esc(p.shortTitle)} (${p.taskCount} tasks, ${p.entry === 'flp' ? 'Fiori' : 'WebGUI'})</option>`).join('')}</select></div>
       <div class="row" style="justify-content:space-between"><h2>Tasks</h2><div class="row"><button type="button" class="btn sm" id="all">All</button><button type="button" class="btn sm" id="none">None</button><button type="button" class="btn sm" id="shots">Screenshot tasks</button></div></div>
       <div class="tasks">${pack.tasks.map((t) => `<label class="task"><input type="checkbox" name="t" value="${t.id}" ${S.selTasks.has(t.id) ? 'checked' : ''}><b>${t.id}. ${esc(t.title)}</b><span>${esc(t.role)} · ${esc(t.area)} · <code>${esc(t.txn)}</code>${t.shot ? ' · screenshot' : ''}</span></label>`).join('')}</div>
     </section>
@@ -286,13 +296,14 @@ async function viewLaunch() {
   $('#all').onclick = () => { pack.tasks.forEach((t) => S.selTasks.add(t.id)); viewLaunch() }
   $('#none').onclick = () => { S.selTasks.clear(); viewLaunch() }
   $('#shots').onclick = () => { S.selTasks = new Set(pack.tasks.filter((t) => t.shot).map((t) => t.id)); viewLaunch() }
+  $('#packSel')?.addEventListener('change', (e) => { S.packId = e.target.value; S.selTasks.clear(); viewLaunch() })
   $('#acc')?.addEventListener('change', (e) => { S.selAccount = e.target.value; viewLaunch() })
   document.querySelectorAll('input[name=mode]').forEach((i) => i.addEventListener('change', () => { S.mode = i.value }))
   $('#launch').addEventListener('submit', run(async (e) => {
     e.preventDefault()
     sync()
     if (!S.selTasks.size) throw new Error('Pick at least one task')
-    const r = await http('/jobs', { method: 'POST', body: { sapUser: S.selAccount, tasks: [...S.selTasks].sort((a, b) => a - b), mode: S.mode, password: $('#pw').value || undefined } }).catch((err) => { if (err.data?.jobId) { go('canvas', err.data.jobId); return null } throw err })
+    const r = await http('/jobs', { method: 'POST', body: { packId: S.packId, sapUser: S.selAccount, tasks: [...S.selTasks].sort((a, b) => a - b), mode: S.mode, password: $('#pw').value || undefined } }).catch((err) => { if (err.data?.jobId) { go('canvas', err.data.jobId); return null } throw err })
     if (r) { toast(r.warning || `Run #${r.id} queued`, !!r.warning); go('canvas', r.id) }
   }))
 }
@@ -544,7 +555,7 @@ async function viewJobs() {
     </section>
     <section class="stack" style="grid-column:span 2">
       ${detail ? `
-      <div class="card row" style="justify-content:space-between"><div><h2>Run #${detail.job.id} · ${esc(detail.job.sap_user)}</h2><p class="small muted">Tasks ${detail.job.tasks.join(', ')} · ${esc(detail.job.mode)} · ${esc(fmtTime(detail.job.created_at))}${detail.job.result ? ` · ${esc(detail.job.result.summary || '')}` : ''}</p></div><button class="btn sm" id="openCanvas">Open canvas</button></div>
+      <div class="card row" style="justify-content:space-between"><div><h2>Run #${detail.job.id} · ${esc(detail.job.sap_user)} · ${esc(detail.job.packId || 'it2406_pt1')}</h2><p class="small muted">Tasks ${detail.job.tasks.join(', ')} · ${esc(detail.job.mode)} · ${esc(fmtTime(detail.job.created_at))}${detail.job.result ? ` · ${esc(detail.job.result.summary || '')}` : ''}</p></div><div class="row"><a class="btn sm primary" href="/api/jobs/${detail.job.id}/report.docx" download>Download Word Report</a><button class="btn sm" id="openCanvas">Open canvas</button></div></div>
       <div class="gallery">${detail.evidence.filter((e) => e.kind === 'screenshot').map((e) => `<figure><a href="/api/jobs/${detail.job.id}/evidence/${e.id}" target="_blank" rel="noopener"><img loading="lazy" src="/api/jobs/${detail.job.id}/evidence/${e.id}" alt="${esc(e.caption || e.name)}"></a><figcaption><b>${e.task ? `Task ${e.task}` : 'Manual capture'}</b><span class="muted">${esc(e.caption || e.name)}</span><a class="small" href="/api/jobs/${detail.job.id}/evidence/${e.id}?dl=1">Download</a></figcaption></figure>`).join('') || '<p class="muted">No screenshots in this run.</p>'}</div>
       ${detail.evidence.some((e) => e.kind === 'dom') ? `<div class="card"><h3>DOM captures</h3><ul class="small">${detail.evidence.filter((e) => e.kind === 'dom').map((e) => `<li><a href="/api/jobs/${detail.job.id}/evidence/${e.id}">${esc(e.name)}</a> <span class="muted">${esc(e.caption || '')}</span></li>`).join('')}</ul></div>` : ''}
       <div class="card"><h3>Verified results</h3>${verifiedTable(detail.events)}</div>` : '<div class="card muted">Pick a run.</div>'}

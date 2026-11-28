@@ -8,17 +8,57 @@ export const webgui = (host, client, txn) => {
   return u.toString()
 }
 
+export const fioriUrl = (host, client, hash = '') => {
+  const u = new URL(`https://${host}/sap/bc/ui2/flp`)
+  u.searchParams.set('sap-client', client)
+  u.searchParams.set('sap-language', 'EN')
+  return hash ? `${u.toString()}#${hash.replace(/^#/, '')}` : u.toString()
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function gotoWithFailover(page, ctx, buildUrl) {
+  const tryGoto = async (host) => {
+    const res = await page.goto(buildUrl(host), { waitUntil: 'domcontentloaded', timeout: 60000 })
+    if (res && res.status() >= 500) throw new Error(`HTTP ${res.status()} from ${host}`)
+    return res
+  }
+  try {
+    return await tryGoto(ctx.host)
+  } catch (err) {
+    if (ctx.fallbackHost && ctx.fallbackHost !== ctx.host) {
+      ctx.host = ctx.fallbackHost
+      return await tryGoto(ctx.host)
+    }
+    throw err
+  }
+}
+
+export function activeFrame(page) {
+  for (const f of page.frames()) {
+    if (f === page.mainFrame()) continue
+    const url = f.url()
+    if (/webgui|sap\/bc\/gui|its|application-/i.test(url)) return f
+  }
+  return page.mainFrame()
+}
 
 export async function settle(page, ms = 600) {
   await page.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {})
   const end = Date.now() + 20000
   while (Date.now() < end) {
     const busy = await page.evaluate(() => {
-      const b = document.querySelector('#ur-loading, .lsBusyIndicator, .urBusyIndicator, [id$="-busy"]')
-      if (!b) return false
-      const r = b.getBoundingClientRect()
-      return r.width > 0 && r.height > 0 && getComputedStyle(b).visibility !== 'hidden'
+      const checkDoc = (doc) => {
+        const b = doc.querySelector('#ur-loading, .lsBusyIndicator, .urBusyIndicator, [id$="-busy"], .sapUiLocalBusyIndicator, #sap-ui-blocklayer-popup, .sapMBusyDialog')
+        if (!b) return false
+        const r = b.getBoundingClientRect()
+        return r.width > 0 && r.height > 0 && getComputedStyle(b).visibility !== 'hidden' && getComputedStyle(b).display !== 'none'
+      }
+      if (checkDoc(document)) return true
+      for (const ifr of document.querySelectorAll('iframe')) {
+        try { if (ifr.contentDocument && checkDoc(ifr.contentDocument)) return true } catch {}
+      }
+      return false
     }).catch(() => false)
     if (!busy) break
     await sleep(250)
@@ -28,48 +68,97 @@ export async function settle(page, ms = 600) {
 
 export async function captureDom(page, target) {
   return page.evaluate((target) => {
-    const vis = (el) => { const r = el.getBoundingClientRect(); if (r.width < 6 || r.height < 6) return null; if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return null; const s = getComputedStyle(el); if (s.visibility === 'hidden' || s.display === 'none') return null; return r }
-    const labelOf = (el) => el.getAttribute('title') || el.getAttribute('aria-label') || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent) || el.getAttribute('placeholder') || ''
     const out = []
-    const push = (el, k) => { const r = vis(el); if (!r || out.length >= 450) return; out.push({ i: out.length, k, id: el.id || '', t: (labelOf(el) || (k !== 'input' ? el.textContent : '') || '').trim().replace(/\s+/g, ' ').slice(0, 90), v: 'value' in el && el.type !== 'password' ? String(el.value).slice(0, 80) : el.getAttribute('aria-checked') || '', ro: el.readOnly || el.getAttribute('aria-readonly') === 'true' || false, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }) }
-    document.querySelectorAll('input:not([type=hidden]), textarea, select').forEach((el) => push(el, 'input'))
-    document.querySelectorAll('[role=button], button, .lsButton').forEach((el) => push(el, 'button'))
-    document.querySelectorAll('[role=tab]').forEach((el) => push(el, 'tab'))
-    document.querySelectorAll('[role=checkbox], [role=radio]').forEach((el) => push(el, 'check'))
-    document.querySelectorAll('[role=treeitem]').forEach((el) => push(el, 'tree'))
+    const scan = (doc, ox, oy, prefix) => {
+      const vis = (el) => {
+        const r = el.getBoundingClientRect()
+        if (r.width < 6 || r.height < 6) return null
+        const left = r.left + ox, top = r.top + oy
+        if (top + r.height < 0 || left + r.width < 0 || top > innerHeight || left > innerWidth) return null
+        const s = doc.defaultView ? doc.defaultView.getComputedStyle(el) : getComputedStyle(el)
+        if (s.visibility === 'hidden' || s.display === 'none') return null
+        return { left, top, width: r.width, height: r.height }
+      }
+      const labelOf = (el) => el.getAttribute('title') || el.getAttribute('aria-label') || (el.id && doc.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent) || el.getAttribute('placeholder') || ''
+      const seen = new Set()
+      const push = (el, k) => {
+        if (seen.has(el) || out.length >= 450) return
+        const r = vis(el)
+        if (!r) return
+        seen.add(el)
+        out.push({
+          i: out.length, k, id: prefix ? `${prefix}${el.id || ''}` : (el.id || ''),
+          t: (labelOf(el) || (k !== 'input' ? el.textContent : '') || '').trim().replace(/\s+/g, ' ').slice(0, 90),
+          v: 'value' in el && el.type !== 'password' ? String(el.value).slice(0, 80) : el.getAttribute('aria-checked') || '',
+          ro: el.readOnly || el.getAttribute('aria-readonly') === 'true' || false,
+          x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height),
+        })
+      }
+      doc.querySelectorAll('input:not([type=hidden]), textarea, select, .sapMInputBaseInner, .sapMSFI').forEach((el) => push(el, 'input'))
+      doc.querySelectorAll('[role=button], button, .lsButton, .sapMBtn, .sapUshellTile, .sapMGT, .sapMSF').forEach((el) => push(el, 'button'))
+      doc.querySelectorAll('[role=tab], .sapMITBFilter').forEach((el) => push(el, 'tab'))
+      doc.querySelectorAll('[role=checkbox], [role=radio], .sapMCb, .sapMRb').forEach((el) => push(el, 'check'))
+      doc.querySelectorAll('[role=treeitem]').forEach((el) => push(el, 'tree'))
+      for (const ifr of doc.querySelectorAll('iframe')) {
+        const ir = ifr.getBoundingClientRect()
+        if (ir.width < 20 || ir.height < 20) continue
+        try {
+          if (ifr.contentDocument) scan(ifr.contentDocument, ox + ir.left, oy + ir.top, ifr.id ? `${ifr.id}::` : 'frame::')
+        } catch {}
+      }
+    }
+    scan(document, 0, 0, '')
     return { els: out, target: target || null, title: document.title }
   }, target || null)
 }
 
 export async function statusbar(page) {
   return page.evaluate(() => {
-    const cands = [...document.querySelectorAll('[id*="sbar"], [id*="Sbar"], .lsMessageBar, .urMsgBarTxt, [role=status]')]
-    const t = cands.map((el) => (el.innerText || el.textContent || '').trim()).filter(Boolean)
+    const collect = (doc) => [...doc.querySelectorAll('[id*="sbar"], [id*="Sbar"], .lsMessageBar, .urMsgBarTxt, [role=status], .sapMMessageToast, .sapMMsgStrip')]
+      .map((el) => (el.innerText || el.textContent || '').trim()).filter(Boolean)
+    const t = collect(document)
+    for (const ifr of document.querySelectorAll('iframe')) {
+      try { if (ifr.contentDocument) t.push(...collect(ifr.contentDocument)) } catch {}
+    }
     return (t.sort((a, b) => b.length - a.length)[0] || '').replace(/\s+/g, ' ').slice(0, 400)
   }).catch(() => '')
 }
 
 export async function popupText(page) {
   return page.evaluate(() => {
-    const p = [...document.querySelectorAll('[role=dialog], .lsPopupWindow, .urPWFloatLeft')].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && el.id !== 'sysInfoAreaMenu' && el.getAttribute('role') !== 'menu' })
-    return p.map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim()).join(' | ').slice(0, 600)
+    const isVisibleDialog = (el) => {
+      const r = el.getBoundingClientRect()
+      return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && el.id !== 'sysInfoAreaMenu' && el.getAttribute('role') !== 'menu'
+    }
+    const collect = (doc) => [...doc.querySelectorAll('[role=dialog], .lsPopupWindow, .urPWFloatLeft, .sapMDialog')]
+      .filter(isVisibleDialog)
+      .map((el) => (el.innerText || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+    const p = collect(document)
+    for (const ifr of document.querySelectorAll('iframe')) {
+      try { if (ifr.contentDocument) p.push(...collect(ifr.contentDocument)) } catch {}
+    }
+    return p.join(' | ').slice(0, 600)
   }).catch(() => '')
 }
 
 export async function isLoginPage(page) {
-  return page.evaluate(() => !!document.querySelector('input[name="sap-password"], #sap-password')).catch(() => false)
+  return page.evaluate(() => !!document.querySelector('input[name="sap-password"], #sap-password, #PASSWORD_FIELD-inner')).catch(() => false)
 }
 
-export async function login(page, { host, client, user, password }) {
-  await page.goto(webgui(host, client), { waitUntil: 'domcontentloaded', timeout: 60000 })
-  await settle(page, 800)
+export async function login(page, ctx) {
+  const { client, user, password, entry } = ctx
+  const build = entry === 'flp' ? (h) => fioriUrl(h, client) : (h) => webgui(h, client)
+  await gotoWithFailover(page, ctx, build)
+  await settle(page, 1000)
   if (!(await isLoginPage(page))) return { ok: true, note: 'session already active' }
-  const u = page.locator('input[name="sap-user"], #sap-user').first()
-  const p = page.locator('input[name="sap-password"], #sap-password').first()
+  const u = page.locator('input[name="sap-user"], #sap-user, #USERNAME_FIELD-inner').first()
+  const p = page.locator('input[name="sap-password"], #sap-password, #PASSWORD_FIELD-inner').first()
   await u.click(); await u.fill(user)
   await p.click(); await p.fill(password)
-  await page.keyboard.press('Enter')
-  await settle(page, 1500)
+  const logonBtn = page.locator('#LOGON_BUTTON, #LOGIN_LINK, button[type="submit"]').first()
+  if (await logonBtn.count()) await logonBtn.click().catch(() => page.keyboard.press('Enter'))
+  else await page.keyboard.press('Enter')
+  await settle(page, 1800)
   const text = await page.evaluate(() => document.body.innerText.slice(0, 4000))
   if (/already logged on|bereits angemeldet/i.test(text)) {
     const opt = page.getByText(/without ending any other logons|ohne andere Anmeldungen/i).first()
@@ -77,7 +166,7 @@ export async function login(page, { host, client, user, password }) {
   }
   if (/new password|neues Kennwort|password.*(expired|change)/i.test(text) && (await page.locator('input[type=password]').count()) > 1) return { ok: false, needsHuman: true, reason: 'SAP requires a password change. Set the new password on the canvas, then press continue.' }
   if (await isLoginPage(page)) {
-    const msg = await statusbar(page) || (await page.evaluate(() => document.querySelector('.lsMessageArea, [role=alert], .urMsgBarTxt')?.innerText || '').catch(() => ''))
+    const msg = await statusbar(page) || (await page.evaluate(() => document.querySelector('.lsMessageArea, [role=alert], .urMsgBarTxt, #LOGIN_ERROR_BLOCK')?.innerText || '').catch(() => ''))
     return { ok: false, reason: `Login rejected: ${msg || 'unknown reason'}` }
   }
   return { ok: true }
@@ -85,17 +174,80 @@ export async function login(page, { host, client, user, password }) {
 
 export async function gotoTxn(page, ctx, code) {
   page.once('dialog', (d) => d.accept().catch(() => {}))
-  await page.goto(webgui(ctx.host, ctx.client, code), { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await gotoWithFailover(page, ctx, (h) => webgui(h, ctx.client, code))
   await settle(page, 1500)
   if (await isLoginPage(page)) {
-    const r = await login(page, ctx)
+    const r = await login(page, { ...ctx, entry: 'webgui' })
     if (!r.ok) return r
-    await page.goto(webgui(ctx.host, ctx.client, code), { waitUntil: 'domcontentloaded', timeout: 60000 })
+    await gotoWithFailover(page, ctx, (h) => webgui(h, ctx.client, code))
     await settle(page, 1500)
   }
   const sb = await statusbar(page)
   if (/not authorized|keine Berechtigung|does not exist/i.test(sb)) return { ok: false, reason: sb }
   return { ok: true, statusbar: sb }
+}
+
+export async function openFioriApp(page, ctx, appName, hash = '') {
+  if (hash) {
+    await gotoWithFailover(page, ctx, (h) => fioriUrl(h, ctx.client, hash))
+    await settle(page, 2000)
+    if (await isLoginPage(page)) {
+      const r = await login(page, { ...ctx, entry: 'flp' })
+      if (!r.ok) return r
+      await gotoWithFailover(page, ctx, (h) => fioriUrl(h, ctx.client, hash))
+      await settle(page, 2000)
+    }
+    return { ok: true, note: `Opened FLP #${hash}`, statusbar: await statusbar(page) }
+  }
+  if (!page.url().includes('/sap/bc/ui2/flp')) {
+    await gotoWithFailover(page, ctx, (h) => fioriUrl(h, ctx.client))
+    await settle(page, 2000)
+    if (await isLoginPage(page)) {
+      const r = await login(page, { ...ctx, entry: 'flp' })
+      if (!r.ok) return r
+    }
+  }
+  const re = new RegExp(String(appName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+  const directTile = page.locator('.sapUshellTile, .sapMGT, [role="link"], [role="button"]').filter({ hasText: re }).first()
+  if (await directTile.count()) {
+    await directTile.click().catch(() => {})
+    await settle(page, 2200)
+    return { ok: true, note: `Opened Fiori tile: ${appName}`, statusbar: await statusbar(page) }
+  }
+  const searchBtn = page.locator('#sf, [aria-label*="Search" i], button[title*="Search" i]').first()
+  if (await searchBtn.count()) {
+    await searchBtn.click().catch(() => {})
+    await sleep(400)
+    const input = page.locator('#searchFieldInShell-input-inner, .sapMSFI, input[type="search"]').first()
+    if (await input.count()) {
+      await input.fill(appName)
+      await page.keyboard.press('Enter')
+      await settle(page, 1800)
+      const hit = page.locator('.sapUshellTile, .sapMGT, .sapUshellSearchTile, [role="listitem"]').filter({ hasText: re }).first()
+      if (await hit.count()) {
+        await hit.click().catch(() => {})
+        await settle(page, 2200)
+        return { ok: true, note: `Opened Fiori app via search: ${appName}`, statusbar: await statusbar(page) }
+      }
+    }
+  }
+  return { ok: false, reason: `Fiori app "${appName}" tile not found on Launchpad` }
+}
+
+export async function captureVar(page, pattern) {
+  const re = pattern instanceof RegExp ? pattern : new RegExp(pattern, 'i')
+  const sb = await statusbar(page)
+  const m1 = sb.match(re)
+  if (m1 && m1[1]) return m1[1].trim()
+  const body = await page.evaluate(() => {
+    let txt = document.body.innerText || ''
+    for (const ifr of document.querySelectorAll('iframe')) {
+      try { if (ifr.contentDocument?.body) txt += '\n' + ifr.contentDocument.body.innerText } catch {}
+    }
+    return txt.slice(0, 12000)
+  }).catch(() => '')
+  const m2 = body.match(re)
+  return m2 && m2[1] ? m2[1].trim() : null
 }
 
 const reOf = (x) => (x instanceof RegExp ? x : new RegExp(`^\\s*${String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'))

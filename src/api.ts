@@ -2,7 +2,9 @@ import { Hono, type Context, type Next } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { now, randomToken, sha256, hashPassword, verifyPassword, emailOk, safeEqual } from './lib/auth'
 import { seal, open } from './lib/crypto'
-import { planFor, taskSummary, suffixOf, dataFor, taskSheet, validatePlan, SAP_CLIENT, SAP_HOST } from '../shared/pack.js'
+import { assignConclusion } from './lib/conclusions'
+import { buildReportDocx } from './lib/docx'
+import { planFor, taskSummary, suffixOf, dataFor, getPack, PACK_LIST, DEFAULT_PACK_ID, taskSheet, validatePlan, SAP_CLIENT, SAP_HOST, SAP_HOST_FALLBACK } from '../shared/pack.js'
 
 export type Bindings = { DB: D1Database; APP_SECRET?: string; SETUP_KEY?: string; CF_ACCOUNT_ID?: string; CF_ANALYTICS_TOKEN?: string; SIMULATE_D1_WRITE_LIMIT?: string }
 type User = { id: number; email: string; name: string; role: string; status: string }
@@ -47,7 +49,7 @@ const ensureSchema = async (c: Context<Env>) => {
   hasWatch = true
   ensured = true
 }
-const planOf = (sapUser: string, tasks: number[], mode: string) => (mode === 'validate' ? validatePlan(sapUser, tasks) : planFor(sapUser, tasks))
+const planOf = (sapUser: string, tasks: number[], mode: string, packId: string = DEFAULT_PACK_ID) => (mode === 'validate' ? validatePlan(sapUser, tasks, packId) : planFor(sapUser, tasks, packId))
 
 const secretOf = (c: Context<Env>) => c.env.APP_SECRET || 'local-dev-secret-change-me'
 const j = <T>(s: string | null | undefined, d: T): T => { try { return s ? JSON.parse(s) : d } catch { return d } }
@@ -134,7 +136,7 @@ const jobFor = async (c: Context<Env>, id: number) => {
 
 const jobView = (job: any) => {
   const { secret, watched_at, ...rest } = job
-  return { ...rest, tasks: j(job.tasks, []), prompt: j(job.prompt, null), result: j(job.result, null), hasSecret: !!secret }
+  return { ...rest, packId: job.pack_id || DEFAULT_PACK_ID, tasks: j(job.tasks, []), prompt: j(job.prompt, null), result: j(job.result, null), hasSecret: !!secret }
 }
 
 
@@ -227,7 +229,12 @@ api.get('/auth/me', async (c) => {
   return c.json({ user: publicUser(u) })
 })
 
-api.get('/pack', (c) => c.json({ tasks: taskSummary(), host: SAP_HOST, client: SAP_CLIENT }))
+api.get('/pack', (c) => {
+  const packId = c.req.query('packId') || DEFAULT_PACK_ID
+  return c.json({ packId: getPack(packId).PACK_META.id, packs: PACK_LIST, tasks: taskSummary(packId), host: SAP_HOST, fallbackHost: SAP_HOST_FALLBACK, client: SAP_CLIENT })
+})
+
+api.get('/packs', (c) => c.json({ packs: PACK_LIST, defaultPackId: DEFAULT_PACK_ID, host: SAP_HOST, fallbackHost: SAP_HOST_FALLBACK, client: SAP_CLIENT }))
 
 api.use('/me/*', needUser)
 api.use('/jobs/*', needUser)
@@ -251,7 +258,8 @@ api.get('/me/accounts', async (c) => {
 
 api.get('/me/plan/:sapUser', async (c) => {
   const tasks = (c.req.query('tasks') || '').split(',').filter(Boolean).map(Number)
-  return c.json(planFor(c.req.param('sapUser'), tasks))
+  const packId = c.req.query('packId') || DEFAULT_PACK_ID
+  return c.json(planFor(c.req.param('sapUser'), tasks, packId))
 })
 
 api.get('/me/sheet/:sapUser', (c) => c.json(taskSheet(c.req.param('sapUser'))))
@@ -345,14 +353,16 @@ api.post('/jobs', async (c) => {
   await recoverStale(c)
   const busy = await c.env.DB.prepare(`SELECT id FROM jobs WHERE sap_user = ? AND status IN (${ACTIVE.map(() => '?').join(',')})`).bind(sapUser, ...ACTIVE).first<{ id: number }>()
   if (busy) return c.json({ error: `Job #${busy.id} is already active on ${sapUser}. SAP allows one dialog session per run.`, jobId: busy.id }, 409)
-  const tasks = (Array.isArray(b.tasks) ? b.tasks : []).map(Number).filter((n: number) => n >= 1 && n <= 14)
+  const pack = getPack(typeof b.packId === 'string' ? b.packId : DEFAULT_PACK_ID)
+  const validIds = new Set(pack.TASKS.map((t: any) => t.id))
+  const tasks = (Array.isArray(b.tasks) ? b.tasks : []).map(Number).filter((n: number) => validIds.has(n))
   const mode = ['assist', 'auto', 'observe', 'validate'].includes(b.mode) ? b.mode : 'assist'
-  const plan = planOf(sapUser, tasks, mode)
+  const plan = planOf(sapUser, tasks, mode, pack.PACK_META.id)
   const secret = b.password ? await seal(secretOf(c), String(b.password)) : null
-  const r = await c.env.DB.prepare('INSERT INTO jobs (user_id, account_id, sap_user, tasks, mode, status, step_total, secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(u.id, acc.id, sapUser, JSON.stringify(tasks.length ? tasks : plan.steps.map((s: any) => s.task).filter((v: number, i: number, a: number[]) => a.indexOf(v) === i)), mode, 'queued', plan.steps.length, secret, now()).run()
+  const r = await c.env.DB.prepare('INSERT INTO jobs (user_id, account_id, sap_user, pack_id, tasks, mode, status, step_total, secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(u.id, acc.id, sapUser, pack.PACK_META.id, JSON.stringify(tasks.length ? tasks : plan.steps.map((s: any) => s.task).filter((v: number, i: number, a: number[]) => a.indexOf(v) === i)), mode, 'queued', plan.steps.length, secret, now()).run()
   const id = Number(r.meta.last_row_id)
-  await event(c, id, 'info', `Queued ${plan.steps.length} steps for ${sapUser} (${plan.data.project}) in ${mode} mode`)
+  await event(c, id, 'info', `Queued ${plan.steps.length} steps for ${sapUser} [${pack.PACK_META.code}] in ${mode} mode`)
   const fleet = (await c.env.DB.prepare('SELECT r.accounts, r.last_seen, i.info FROM runners r LEFT JOIN runner_info i ON i.runner_id = r.id WHERE r.revoked = 0').all<any>()).results
   const able = fleet.filter((r) => {
     const lim = j<string[]>(r.accounts, [])
@@ -366,7 +376,7 @@ api.post('/jobs', async (c) => {
     ? `No runner can take ${sapUser}: every runner is limited to other accounts or holds no password for it. Enter the SAP password here, or add ${sapUser} to a runner's SAP_ACCOUNTS / limit.`
     : !online.length ? `A runner can take ${sapUser} but none is online right now. The job waits in the queue until one connects.` : null
   if (warning) await event(c, id, 'warn', warning)
-  await audit(c, u.id, 'job.create', { id, sapUser, tasks, mode })
+  await audit(c, u.id, 'job.create', { id, sapUser, packId: pack.PACK_META.id, tasks, mode })
   return c.json({ id, warning })
 })
 
@@ -382,7 +392,38 @@ api.get('/jobs/:id', async (c) => {
 api.get('/jobs/:id/plan', async (c) => {
   const job = await jobFor(c, Number(c.req.param('id')))
   if (!job) return c.json({ error: 'Not found' }, 404)
-  return c.json(planOf(job.sap_user, j(job.tasks, []), job.mode))
+  return c.json(planOf(job.sap_user, j(job.tasks, []), job.mode, job.pack_id || DEFAULT_PACK_ID))
+})
+
+api.get('/jobs/:id/report.docx', async (c) => {
+  const job = await jobFor(c, Number(c.req.param('id')))
+  if (!job) return c.json({ error: 'Not found' }, 404)
+  const packId = job.pack_id || DEFAULT_PACK_ID
+  const pack = getPack(packId)
+  const owner = await c.env.DB.prepare('SELECT name, email FROM users WHERE id = ?').bind(job.user_id).first<{ name: string; email: string }>()
+  const shots = (await c.env.DB.prepare("SELECT name, caption, body FROM evidence WHERE job_id = ? AND kind = 'screenshot' ORDER BY id").bind(job.id).all<{ name: string; caption: string; body: string }>()).results
+  const evs = (await c.env.DB.prepare("SELECT step_key, message FROM events WHERE job_id = ? AND level IN ('ok', 'info') ORDER BY id LIMIT 60").bind(job.id).all<{ step_key: string; message: string }>()).results
+  const conclusion = await assignConclusion(c.env.DB, packId, job.sap_user)
+  const resObj = j<any>(job.result, null)
+  const docx = buildReportDocx({
+    studentName: owner?.name || 'Student',
+    studentEmail: owner?.email || '',
+    sapUser: job.sap_user,
+    packCode: pack.PACK_META.code,
+    packTitle: pack.PACK_META.title,
+    dateStr: new Date().toISOString().slice(0, 10),
+    statusSummary: resObj?.summary || `${job.status} (${job.step_idx}/${job.step_total} steps)`,
+    conclusion: conclusion.text,
+    variationIdx: conclusion.variationIdx,
+    readbacks: evs.map((e) => ({ stepKey: e.step_key || '', message: e.message })),
+    screenshots: shots.map((s) => ({ name: s.name, caption: s.caption || s.name, base64: s.body }))
+  })
+  const filename = `${packId}_${job.sap_user}_job${job.id}.docx`
+  return c.body(docx, 200, {
+    'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'content-disposition': `attachment; filename="${filename}"`,
+    'cache-control': 'no-store'
+  })
 })
 
 api.get('/jobs/:id/frame', async (c) => {
@@ -607,7 +648,8 @@ api.post('/runner/claim', async (c) => {
   const password = job.secret ? await open(secretOf(c), job.secret).catch(() => null) : null
   await c.env.DB.prepare('UPDATE jobs SET secret = NULL WHERE id = ?').bind(job.id).run()
   await event(c, job.id, 'info', `Claimed by runner "${r.name}"`)
-  return c.json({ job: { id: job.id, sapUser: job.sap_user, mode: job.mode, tasks: j(job.tasks, []), password }, plan: planOf(job.sap_user, j(job.tasks, []), job.mode) })
+  const packId = job.pack_id || DEFAULT_PACK_ID
+  return c.json({ job: { id: job.id, sapUser: job.sap_user, packId, mode: job.mode, tasks: j(job.tasks, []), password }, plan: planOf(job.sap_user, j(job.tasks, []), job.mode, packId) })
 })
 
 const runnerJob = async (c: Context<Env>) => {
